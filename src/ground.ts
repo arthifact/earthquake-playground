@@ -1,14 +1,22 @@
-// The ground of the Quake view: a slice 61 km wide and 29 km deep under 3 km of sky, 80 m cells, with a sponge
-// of 50 cells at the sides and the bottom. Rock types, the ready-made grounds, and their colours.
+// The ground of the Quake view: a slice 61 km wide and 29 km deep under 3 km of sky, 80 m cells, with an absorbing
+// layer of 50 cells at the sides and the bottom; or the same grid scaled up to 600 km wide (cells to 800 m, waves
+// ten times longer). Rock types, the ready-made grounds, and their colours.
 
 import type { KindId } from "./noise";
 import { PAPER_RGB, earth, hex, mix, type RGB } from "./plot";
 
-export const H = 0.08;                       // km per cell
+/** Slice sizes: the scale of the grid (1: 80 m cells, 61 km wide, waves at 1.1 Hz). */
+export const SCALES = [1, 2.5, 5, 10];
+export let SCALE = 1;
+export let H = 0.08;                         // km per cell
 export const W = 768, VH = 400, SKY = 40;    // cells on screen; rows of sky above sea level
 export const SPONGE = 50;
 export const NX = W + 2 * SPONGE, NZ = VH + SPONGE;
-export const WIDTH_KM = W * H, DEPTH_KM = (VH - SKY) * H;
+export let WIDTH_KM = W * H, DEPTH_KM = (VH - SKY) * H;
+/** Scale the slice: cells s × 80 m (the number of cells stays, so it runs as fast). */
+export function setScale(s: number) {
+  SCALE = s; H = 0.08 * s; WIDTH_KM = W * H; DEPTH_KM = (VH - SKY) * H;
+}
 
 export interface Rock { name: string; vp: number; vs: number; rho: number; tint?: string; group?: string }
 /** Typical speeds (km/s) and densities (g/cm³). The grid carries S waves down to 1.6 km/s, so the softest
@@ -151,11 +159,13 @@ export const PRESETS: Record<string, Preset> = {
   },
 };
 
-/** The ground for a preset on the whole grid (the sponge copies the nearest column on screen). */
+/** The ground for a preset on the whole grid (the absorbing layer copies the nearest column on screen). A bigger
+ *  slice stretches the ready-made ground sideways and keeps its depths: a valley 3.4 km deep stays 3.4 km deep, and
+ *  below the presets' 29 km the mantle goes on. */
 export function build(preset: Preset) {
   const vp = new Float32Array(NX * NZ), vs = new Float32Array(NX * NZ), rho = new Float32Array(NX * NZ);
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
-    const x = Math.min(W - 1, Math.max(0, i - SPONGE)) * H, r = preset.at(x, (j - SKY + 0.5) * H), k = j * NX + i;
+    const x = Math.min(W - 1, Math.max(0, i - SPONGE)) * 0.08, r = preset.at(x, (j - SKY + 0.5) * H), k = j * NX + i;
     vp[k] = r.vp; vs[k] = r.vs; rho[k] = r.rho;
   }
   return { vp, vs, rho };

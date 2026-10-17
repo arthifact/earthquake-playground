@@ -37,13 +37,13 @@ type Grid = Float32Array<ArrayBuffer>;
 
 export class Sim {
   readonly n: number;
-  readonly dt: number;
+  dt: number;
   readonly samples: number;
   /** Steps between seismometer samples, and the steps it takes to fill the record (samples × every). */
   readonly every: number;
   readonly end: number;
   /** The source's peak comes this long after the quake starts (s); seismograms count time from it. */
-  readonly t0: number;
+  t0: number;
   /** Steps since the quake started. */
   step = 0;
   /** Seismometer samples copied back from the GPU so far, and their values: sample, station, (vx, vz). */
@@ -93,25 +93,8 @@ export class Sim {
     this.planes = new Float32Array(PLANES * n);
     this.rockPixels = new Uint8Array(view.w * view.h * 4);
 
-    // The open sides end in a convolutional perfectly matched layer (C-PML; Komatitsch and Martin 2007): each
-    // derivative there gets a memory variable psi <- b psi + a d, with damping d growing as the square of the depth
-    // into the layer (for a reflection of PML_R at normal incidence) and alpha = pi f0 falling to 0 at its far side,
-    // so grazing and slow waves are taken too. a and b at whole and half cells, along x then z.
-    const { left, right, bottom, top } = cfg.sponge, dt = this.dt;
-    const coefs = new Float32Array(4 * (nx + nz));
-    const profile = (o: number, count: number, lo: number, hi: number) => {
-      for (let half = 0; half < 2; half++) for (let q = 0; q < count; q++) {
-        const at = q + 0.5 * half;
-        const into = Math.max(lo > 0 ? (lo - at) / lo : 0, hi > 0 ? (at - (count - 1 - hi)) / hi : 0);
-        const x = Math.min(1, Math.max(0, into)), width = (at < count / 2 ? lo : hi) * cfg.h;
-        const d = x > 0 && width > 0 ? ((3 * cfg.vmax * Math.log(1 / PML_R)) / (2 * width)) * x * x : 0;
-        const alpha = x > 0 ? Math.PI * cfg.f0 * (1 - x) : 0, b = Math.exp(-(d + alpha) * dt);
-        coefs[o + 2 * half * count + q] = d > 0 ? (d / (d + alpha)) * (b - 1) : 0;
-        coefs[o + (2 * half + 1) * count + q] = d > 0 ? b : 1;
-      }
-    };
-    profile(0, nx, left, right);
-    profile(4 * nx, nz, top, bottom);
+    const { left, right, bottom, top } = cfg.sponge;
+    const coefs = this.pmlCoefficients();
     this.pmlCoefs = coefs.length;
     const anyPml = left + right + bottom + top > 0;
 
@@ -183,6 +166,43 @@ export class Sim {
     this.ctx = canvas.getContext("webgpu")!;
     this.ctx.configure({ device, format, alphaMode: "opaque" });
     this.writeParams();
+  }
+
+  /** The open sides end in a convolutional perfectly matched layer (C-PML; Komatitsch and Martin 2007): each
+   *  derivative there gets a memory variable psi <- b psi + a d, with damping d growing as the square of the depth
+   *  into the layer (for a reflection of PML_R at normal incidence) and alpha = pi f0 falling to 0 at its far side,
+   *  so grazing and slow waves are taken too. a and b at whole and half cells, along x then z. */
+  private pmlCoefficients() {
+    const { nx, nz, h, vmax, f0 } = this.cfg, { left, right, bottom, top } = this.cfg.sponge, dt = this.dt;
+    const coefs = new Float32Array(4 * (nx + nz));
+    const profile = (o: number, count: number, lo: number, hi: number) => {
+      for (let half = 0; half < 2; half++) for (let q = 0; q < count; q++) {
+        const at = q + 0.5 * half;
+        const into = Math.max(lo > 0 ? (lo - at) / lo : 0, hi > 0 ? (at - (count - 1 - hi)) / hi : 0);
+        const x = Math.min(1, Math.max(0, into)), width = (at < count / 2 ? lo : hi) * h;
+        const d = x > 0 && width > 0 ? ((3 * vmax * Math.log(1 / PML_R)) / (2 * width)) * x * x : 0;
+        const alpha = x > 0 ? Math.PI * f0 * (1 - x) : 0, b = Math.exp(-(d + alpha) * dt);
+        coefs[o + 2 * half * count + q] = d > 0 ? (d / (d + alpha)) * (b - 1) : 0;
+        coefs[o + (2 * half + 1) * count + q] = d > 0 ? b : 1;
+      }
+    };
+    profile(0, nx, left, right);
+    profile(4 * nx, nz, top, bottom);
+    return coefs;
+  }
+
+  /** The same grid at another scale: cells of h km and a source of f0 Hz (both scaled by the same factor from the
+   *  start). Elastic waves look the same when lengths and times scale together, so only the clock, the source and
+   *  the absorbing layer change; the record keeps its number of samples, now spanning seconds × the factor. The
+   *  ground is still again (and its loss factors need setGround again if they are used). */
+  setScale(h: number, f0: number) {
+    const k = h / this.cfg.h;
+    Object.assign(this.cfg, { h, f0, seconds: this.cfg.seconds * k });
+    this.dt = 0.45 * h / this.cfg.vmax;
+    this.t0 = 1.2 / f0;
+    this.device.queue.writeBuffer(this.b.pml, 0, this.pmlCoefficients());
+    this.writeParams();
+    this.reset();
   }
 
   /** A new ground: speeds (km/s) and density (g/cm³) on the whole grid; P speed 0 is air. Optionally how fast

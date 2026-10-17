@@ -6,26 +6,29 @@
 // the records download as SAC and CSV. Draw any rock type, or dig caves.
 
 import { save, sac, csv, zip, type Trace } from "../export";
-import { DEPTH_KM, H, NX, NZ, PRESETS, ROCK, SKY, SPONGE, VH, VMAX, W, WIDTH_KM, build, colour, rockAt, rockCss, type Preset, type Rock } from "../ground";
+import { DEPTH_KM, H, NX, NZ, PRESETS, ROCK, SCALE, SCALES, SKY, SPONGE, VH, VMAX, W, WIDTH_KM, build, colour, rockAt, rockCss, setScale, type Preset, type Rock } from "../ground";
 import { KINDS, LEVELS, source, type KindId } from "../noise";
 import { ACCENT, INK, LINE, MONO, MUTED, NAVY, OCHRE, PAPER, RUST, TEAL, label, ramp, star, surface } from "../plot";
-import { BLASTS, FELT, ROMAN, blastMagnitude, intensity, ruptureKm, size, units } from "../shaking";
+import { BLASTS, FELT, ROMAN, blastMagnitude, corner, intensity, ruptureKm, size, units } from "../shaking";
 import { amplitude, bandpass, spectrogram } from "../spectrum";
 import { Sim } from "../sim";
 import { applyGround, decode, diffGround, encode, fromAddress, linkFor, type Scenario } from "../scenario";
 import { arrivals } from "../travel";
 import { segmented, type Log, type Room, type View } from "./view";
 
-const F0 = 1.1;                              // source peak frequency, Hz
+// Times and frequencies follow the slice's scale (ground.ts SCALES): a slice s times bigger has cells, waves,
+// records and samples s times longer. These are the values for the 61 km slice; scaled() sets them.
+let F0 = 1.1;                                // source peak frequency, Hz
 // How long to record: until the quake's waves have gone. At least until the slowest wave could have crossed the
 // whole slice (plus the rupture's own time), then on while any seismometer still hears the quake; never past MAX_S.
-const MAX_S = 120;                           // seconds of seismogram at most
+let MAX_S = 120;                             // seconds of seismogram at most
 const NOISE_S = 60;                          // the noise sources alone: a fixed length, enough for their spectra
-const AXIS_S = 30;                           // the time axis starts this long and grows with the record
+let AXIS_S = 30;                             // the time axis starts this long and grows with the record
 // quiet: the last 3 s below 3 % of each station's peak (the absorbing edges send back echoes of about 2 %,
 // measured on plain rock, so a stricter bar would wait for those)
-const TAIL_S = 3, QUIET = 0.03;
-const SPS = 100;                             // samples per second, as a broadband seismometer (HH channels)
+let TAIL_S = 3;
+const QUIET = 0.03;
+let SPS = 100;                               // samples per second, as a broadband seismometer (HH channels; BH when slower)
 const GAINS: [number, number, number] = [1.2e6, 1.2e5, 5e4];   // measured: P, S and ground speed peak near 1.5e-5, 6e-5, 1.5e-4
 const EXAG = 4e5;                            // particles: displacement peaks near 2e-5, shown as up to 5 cells
 const REF_KM = 20;
@@ -39,43 +42,28 @@ const MEASURES = { vel: ["Velocity", "m/s", "ground velocity"], disp: ["Displace
 type Measure = keyof typeof MEASURES;
 type Tool = "fault" | "blast" | "draw" | "dig";
 const MAX_SOURCES = 4;
-/** Filters for the seismograms on screen: high-pass and low-pass corners (Hz, 0 for none). */
-const FILTERS: [string, number, number, string][] = [
-  ["none", 0, 0, "No filter"], ["micro", 0.1, 0.5, "0.1–0.5 Hz · ocean microseism"], ["quake", 0.5, 2, "0.5–2 Hz · the quake's waves"],
-  ["cultural", 1, 4, "1–4 Hz · traffic and machines"], ["hp", 1, 0, "High-pass 1 Hz · no slow noise"], ["lp", 0, 1, "Low-pass 1 Hz · no fast noise"], ["custom", 0.5, 2, "Your own band…"],
+/** Filters for the seismograms on screen: high-pass and low-pass corners (Hz, 0 for none), whether they follow the
+ *  slice's scale (the quake's band does; the ocean's and traffic's are fixed by nature), and what they are for. */
+const FILTERS: [string, number, number, boolean, string][] = [
+  ["none", 0, 0, false, "No filter"], ["micro", 0.1, 0.5, false, "ocean microseism"], ["quake", 0.5, 2, true, "the quake's waves"],
+  ["cultural", 1, 4, false, "traffic and machines"], ["hp", 1, 0, true, "no slow noise"], ["lp", 0, 1, true, "no fast noise"], ["custom", 0.5, 2, true, "Your own band…"],
 ];
-type Look = "trace" | "spec" | "sgram";
-/** Ready-made lessons: a ground, a fault (x, depth at each end, km) or an explosion, seismometers (km) and a task. */
-interface Lesson {
-  name: string; preset: string; task: string; stations: number[]; mystery?: boolean;
-  fault?: { from: [number, number]; to: [number, number]; magnitude: number; slip: "normal" | "reverse" };
-  blast?: { id: string; at: [number, number] };
+const hz = (f: number) => (f < 0.1 ? f.toFixed(3) : f < 1 ? f.toFixed(2) : f.toFixed(1)).replace(/\.?0+$/, "");
+const corners = (f: (typeof FILTERS)[number]) => f[3] ? [f[1] / SCALE, f[2] / SCALE] : [f[1], f[2]];
+function filterName(f: (typeof FILTERS)[number]) {
+  const [lo, hi] = corners(f);
+  return f[0] === "none" || f[0] === "custom" ? f[4] : lo && hi ? `${hz(lo)}–${hz(hi)} Hz · ${f[4]}` : lo ? `High-pass ${hz(lo)} Hz · ${f[4]}` : `Low-pass ${hz(hi)} Hz · ${f[4]}`;
 }
-const LESSONS: Lesson[] = [
-  { name: "P, S and surface waves", preset: "plain", stations: [30, 42, 54],
-    fault: { from: [18, 6], to: [22, 14], magnitude: 6, slip: "normal" },
-    task: "Watch the P wave (rust) arrive first, then the S wave (navy), then the surface waves along the top. Which one shakes the ground hardest? Read the seismograms: P, S and R are marked." },
-  { name: "How far away? S minus P", preset: "layers", stations: [8, 30, 54], mystery: true,
-    fault: { from: [38, 8], to: [41, 14], magnitude: 6, slip: "reverse" },
-    task: "The quake is hidden. S waves travel slower than P waves, so the gap S − P grows with distance: about 8 km for every second. Read S − P at each seismometer and work out where the quake is. Then untick Mystery to check." },
-  { name: "Up or down? First motions", preset: "plain", stations: [8, 30, 54],
-    fault: { from: [18, 6], to: [22, 14], magnitude: 6, slip: "normal" },
-    task: "Look at the first P motion at each seismometer: P↑ pushes the ground up, P↓ pulls it down. A fault pushes on one side and pulls on the other. Now switch Slip to Reverse and start again: what changes?" },
-  { name: "Earthquake or explosion?", preset: "plain", stations: [30, 42, 54],
-    blast: { id: "n100", at: [20, 1] },
-    task: "A 100-kiloton nuclear test. An explosion pushes out equally in all directions: strong P waves, weak S waves, and the first motion is up (P↑) everywhere. Compare with the first lesson's earthquake." },
-  { name: "Soft soil shakes harder", preset: "basin", stations: [22, 40, 54],
-    fault: { from: [12, 7], to: [16, 15], magnitude: 6, slip: "normal" },
-    task: "B sits in a valley of soft soil, A and C on rock. Compare their peaks and intensities, and how long each one shakes. Try Show: Shaking." },
-  { name: "Water stops S waves", preset: "ocean", stations: [8, 30, 50],
-    fault: { from: [14, 6], to: [18, 14], magnitude: 6, slip: "reverse" },
-    task: "A floats on the sea. Water cannot be sheared, so S waves cannot travel in it. Which seismometers get an S wave? Watch the S wave (navy) stop at the sea floor." },
-  { name: "Mountains scatter waves", preset: "mountains", stations: [12, 24, 46],
-    fault: { from: [10, 6], to: [14, 13], magnitude: 6, slip: "normal" },
-    task: "Surface waves climb over the mountains, and some of their energy bounces back. Compare B on the first mountain with A in front of it and C behind." },
-];
-const FMIN = 0.1, FMAX = 10;                  // the frequency axis of spectra (Hz, log)
-const F_GRID = 1.6 / (5 * H);                // above this the grid has fewer than 5 cells per wavelength of the slowest S wave
+type Look = "trace" | "spec" | "sgram";
+let FMIN = 0.1, FMAX = 10;                    // the frequency axis of spectra (Hz, log)
+let F_GRID = 1.6 / (5 * H);                  // above this the grid has fewer than 5 cells per wavelength of the slowest S wave
+/** Set the times and frequencies for the slice's scale. */
+function scaled() {
+  F0 = 1.1 / SCALE; MAX_S = 120 * SCALE; AXIS_S = 30 * SCALE; TAIL_S = 3 * SCALE; SPS = 100 / SCALE;
+  FMIN = 0.1 / SCALE; FMAX = 10 / SCALE; F_GRID = 1.6 / (5 * H);
+}
+/** The Brune source spectrum of a magnitude 5 at f Hz, relative to its flat level. */
+const brune5 = (f: number) => 1 / (1 + (f / corner(5)) ** 2);
 const HEAT = ramp([PAPER, "#ebc488", OCHRE, RUST, "#3a1a10"]);
 const WARM_S = 20;                           // the noise sources run this long before a quake, so their waves fill the slice
 const NOISE_LOSS = 0.5;                      // 1/s: noise waves fade e times in 2 s (about 6 km), as rock near the surface absorbs them
@@ -113,12 +101,6 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     <canvas class="seis" id="qSeis"></canvas>`;
   side.innerHTML = `
     <div class="pane">
-      <h2>Lessons</h2>
-      <div class="field"><span class="lbl">Ready-made experiments</span><select id="qLesson"><option value="">Choose a lesson…</option>${LESSONS.map((l, i) => `<option value="${i}">${i + 1}. ${l.name}</option>`).join("")}</select></div>
-      <p id="qTask">Each lesson sets up the ground, the quake and the seismometers, starts it, and asks a question.</p>
-      <div class="toggles"><label><input type="checkbox" id="qMystery">Mystery quake (hide the source and its waves)</label></div>
-    </div>
-    <div class="pane">
       <h2>Start an earthquake</h2>
       <p>Earthquakes happen on faults. Drag across the ground to draw a fault, then press <b style="color:var(--text)">Start the quake</b>. Click on the fault, or drag its star, to choose where the rupture starts. Drag a seismometer <b style="color:var(--text)">▲</b> along the surface to move it.</p>
       <div class="field"><span class="lbl">A click</span><div class="segmented" id="qTool"><button type="button" data-tool="fault">Fault</button><button type="button" data-tool="blast">Explosion</button><button type="button" data-tool="draw">Rock</button><button type="button" data-tool="dig">Dig</button></div></div>
@@ -153,6 +135,8 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       <p id="qBlastNote"></p>
     </div>
     <div class="pane">
+      <div class="field"><span class="lbl">Size of the slice</span><div class="segmented" id="qSize">${SCALES.map((k) => `<button type="button" data-size="${k}">${Math.round(W * 0.08 * k)} km</button>`).join("")}</div></div>
+      <p class="mono" id="qSizeNote" style="font-size:10px"></p>
       <div class="field"><span class="lbl">Ground</span><select id="qPreset">${Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join("")}</select></div>
       <p id="qNote"></p>
     </div>
@@ -175,14 +159,14 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       <div class="field"><span class="lbl">Direction</span><div class="segmented" id="qComp"><button type="button" data-comp="z">Up and down</button><button type="button" data-comp="h">Sideways</button></div></div>
       <details class="more"><summary>Filter and spectra</summary><div class="stack">
         <div class="field"><span class="lbl">Show records as</span><div class="segmented" id="qLook"><button type="button" data-look="trace">Traces</button><button type="button" data-look="spec">Spectra</button><button type="button" data-look="sgram">Spectrogram</button></div></div>
-        <div class="field"><span class="lbl">Filter</span><select id="qFilter">${FILTERS.map(([id, , , name]) => `<option value="${id}">${name}</option>`).join("")}</select></div>
+        <div class="field"><span class="lbl">Filter</span><select id="qFilter">${FILTERS.map((f) => `<option value="${f[0]}">${filterName(f)}</option>`).join("")}</select></div>
         <div class="stack" id="qBand" hidden>
           <label class="slider"><span class="lbl">High-pass</span><output id="qLoOut"></output><input type="range" id="qLo" min="-1.3" max="1" step="0.01" value="-0.3"></label>
           <label class="slider"><span class="lbl">Low-pass</span><output id="qHiOut"></output><input type="range" id="qHi" min="-1.3" max="1" step="0.01" value="0.3"></label>
         </div>
         <div class="toggles"><label><input type="checkbox" id="qZero">Zero phase</label></div>
         <div class="field"><span class="lbl">Scale</span><div class="segmented" id="qScale"><button type="button" data-scale="fit">Each to fit</button><button type="button" data-scale="true">True size</button></div></div>
-        <p class="mono" style="font-size:10px">4-pole Butterworth, causal like a real instrument unless zero phase. Spectra: whole record in ink, before the P wave in grey; above ${F_GRID.toFixed(0)} Hz the grid is too coarse. Downloads are not filtered.</p>
+        <p class="mono" style="font-size:10px">4-pole Butterworth, causal like a real instrument unless zero phase. Spectra: whole record in ink, before the P wave in grey; above <span id="qFgrid">${hz(F_GRID)}</span> Hz the grid is too coarse. Downloads are not filtered.</p>
       </div></details>
       <button type="button" class="btn wide" id="qDownload">Download seismograms</button>
       <p class="mono" style="font-size:10px">SAC (velocity, nm/s, ObsPy-ready) and CSV (m/s), 100 samples per second, noise included.</p>
@@ -235,11 +219,15 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   const faults: Fault[] = [];
   let chosen: Fault | null = null;
   let hasSource = false;                           // has a quake or explosion started on this ground yet?
-  let mystery = false;                             // hide the source and its waves: find it from the seismograms
   let minEnd = AXIS_S, ended = false;              // the earliest end of this recording (s after the quake); is it over?
   let rupture: { fault: Fault; at: number; s0: number; s1: number; parts: number; times: Float32Array } | null = null;   // along the fault, in cells
   let box = { L: PAD.l, T: PAD.t, iw: 1, ih: 1 };
 
+  /** m/s per simulation unit for this quake. K holds for the 61 km slice. A slice s times bigger solves the same
+   *  equations with lengths and times s times larger: its records come out s times larger, sqrt(20 km / r) gives
+   *  s^-1/2, and a real source of the same moment shakes s^-3 times less at s times the distance, more where its
+   *  spectrum is richer at the lower frequency (Brune): together K s^-3.5 brune5(F0) / brune5(1.1). */
+  const amp = () => K * size(sourceMagnitude(), F0) * SCALE ** -3.5 * brune5(F0) / brune5(1.1);
   const sourceMagnitude = () => kind === "quake" ? (rupture?.fault ?? chosen)?.magnitude ?? 6 : blastMagnitude(blast.kt);
   const findSurface = () => {
     for (let x = 0; x < W; x++) {
@@ -302,7 +290,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       if (vp > 0) slow = Math.min(slow, vs > 0 ? 0.92 * vs : vp);
     }
     const qx = quakeAt[0] - SPONGE, far = (Math.max(qx, W - qx) + Math.max(0, quakeAt[1] - SKY)) * H;
-    minEnd = Math.min(MAX_S, duration + far / (Number.isFinite(slow) ? slow : 1.5) + 3);
+    minEnd = Math.min(MAX_S, duration + far / (Number.isFinite(slow) ? slow : 1.5) + 3 * SCALE);
     ended = false;
   }
   /** Has every seismometer been quiet for the last TAIL_S seconds of the quake's record? */
@@ -463,12 +451,12 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     $("qSources").innerHTML = sources.map((q, s) => `<div class="srcrow"><i style="background:${SOURCE_COLOUR[q.kind]}"></i><b>${KINDS[q.kind].name}</b><span class="mono">${(q.x * H).toFixed(1)} km</span>
       <button type="button" class="close" data-remove="${s}" aria-label="Remove ${KINDS[q.kind].name}">×</button>
       <select data-level="${s}" aria-label="Level of ${KINDS[q.kind].name}">${LEVELS.map(([v, name]) => `<option value="${v}"${v === q.level ? " selected" : ""}>${name}</option>`).join("")}</select></div>`).join("");
-    $("qAdd").querySelectorAll("button").forEach((b) => { b.disabled = sources.length >= MAX_SOURCES; });
+    $("qAdd").querySelectorAll("button").forEach((b) => { b.disabled = sources.length >= MAX_SOURCES || SCALE !== 1; });
     if (!sim) return;
     sim.setNoise(sources.map((q) => source(q.kind, q.x + SPONGE, q.j, q.level, sim!.dt)), Math.ceil(WARM_S / sim.dt));
   }
   function addSource(kind: KindId) {
-    if (sources.length >= MAX_SOURCES) return;
+    if (sources.length >= MAX_SOURCES || SCALE !== 1) return;
     const km = preset.noise?.[kind] ?? SOURCE_AT[kind];
     sources.push({ kind, x: Math.min(W - 3, Math.max(2, Math.round(km / H))), level: LEVELS[1][0], j: 0 });
     log(`${KINDS[kind].name}: ${KINDS[kind].note}`);
@@ -519,7 +507,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   /** Resample the records to 100 samples per second in m/s, with the 2D-to-3D conversion; returns the count. */
   function readRecords() {
     if (!sim || sim.recorded < 3) return 0;
-    const { records, noiseRecords, nst, dt, t0 } = sim, scale = K * size(sourceMagnitude(), F0), loud = sources.length > 0;
+    const { records, noiseRecords, nst, dt, t0 } = sim, scale = amp(), loud = sources.length > 0;
     const n = Math.max(0, Math.min(MAXN, Math.floor(((sim.recorded - 2) * dt - t0) * SPS) + 1));
     for (let s = 0; s < nst; s++) {
       const g = scale * Math.sqrt(REF_KM / Math.max(1, distance(s)));
@@ -558,7 +546,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   function scenario(start: boolean): Scenario {
     const { rocks, runs } = diffGround(build(preset), ground);
     return {
-      v: 1, preset: presetId, rocks, runs, start,
+      v: 1, scale: SCALE, preset: presetId, rocks, runs, start,
       faults: faults.map((f) => ({ a: [...f.a], b: [...f.b], magnitude: f.magnitude, start: f.start, speed: f.speed, slip: f.slip })),
       chosen: chosen ? faults.indexOf(chosen) : -1, kind, blast: blast.id, at: [quakeAt[0], quakeAt[1]],
       stations: [...stationsX], noise: stationsX.map((_, s) => noise[s]), sources: sources.map((q) => [q.kind, q.x, q.level]),
@@ -575,6 +563,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   /** Open a shared setup: its ground, faults, explosion, seismometers and noise; start the quake if it says so. */
   function open(sc: Scenario) {
     if (!sim || !PRESETS[sc.preset]) { log("That link's setup could not be read"); return; }
+    setSize(sc.scale ?? 1);
     loadPreset(sc.preset);
     applyGround(ground, sc.rocks, sc.runs);
     sim.setGround(ground.vp, ground.vs, ground.rho, colour);
@@ -602,18 +591,20 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     const m = sourceMagnitude(), depth = Math.max(0, (quakeAt[1] - SKY) * H);
     const name = kind === "quake" ? `Playground M${m.toFixed(1)}` : `Playground ${blast.name.split(" · ")[1]} blast`;
     const q = { name, magnitude: m, depth, delta: 1 / SPS, origin: new Date() };
-    const traces: Trace[] = stationsX.flatMap((_, s) => ([["HHZ", 0, 0, 1], ["HHE", 90, 90, 0]] as const).map(([channel, azimuth, incidence, c]) => ({
+    const bc = SPS >= 80 ? "HH" : "BH";                // SEED band code: high (80 samples per second and up) or broad band
+    const traces: Trace[] = stationsX.flatMap((_, s) => ([[`${bc}Z`, 0, 0, 1], [`${bc}E`, 90, 90, 0]] as const).map(([channel, azimuth, incidence, c]) => ({
       station: NAMES[s], channel, azimuth, incidence, velocity: trace(s, c, n), distance: epicentral(s), p: arr?.p[s], s: arr?.s[s],
     })));
     const readme = [
       "Earthquake Playground synthetic seismograms", "",
       `Source: ${kind === "quake" && rupture ? `earthquake, magnitude ${m.toFixed(1)}: a ${rupture.fault.slip} fault dipping ${frame(rupture.fault).dip}°, rupturing ${((rupture.s1 - rupture.s0) * H).toFixed(1)} km at ${rupture.fault.speed.toFixed(2)} x the S speed (double couples along the fault), starting` : `${blast.name} (explosion), about magnitude ${m.toFixed(1)}`}, ${depth.toFixed(1)} km deep, ${((quakeAt[0] - SPONGE) * H).toFixed(2)} km along the slice.`,
       `Ground: ${preset.name}. Stations on the surface at ${stationsX.map((x, s) => `${NAMES[s]} ${(x * H).toFixed(2)} km`).join(", ")} along the slice.`,
-      "Channels: HHZ up, HHE horizontal along the slice (away from the left edge). 100 samples per second, starting at the origin time.",
+      `Channels: ${bc}Z up, ${bc}E horizontal along the slice (away from the left edge). ${SPS} samples per second, starting at the origin time.`,
       "SAC files: ground velocity in nm/s (IDEP = IVEL), T0 = P and T1 = S first-arrival times, DIST = epicentral distance (km), EVDP in km.",
       "CSV: ground velocity in m/s.", "",
-      "Made by a 2D elastic (P-SV) finite-difference simulation with a 1.1 Hz Ricker source. Amplitudes scale with magnitude through a Brune",
-      "spectrum at 1.1 Hz, calibrated to about 1.5 cm/s at 20 km for magnitude 5, converted from 2D toward 3D (half-differentiated, then",
+      `Made by a 2D elastic (P-SV) finite-difference simulation with a ${hz(F0)} Hz Ricker source on a slice ${WIDTH_KM.toFixed(0)} km wide (${(H * 1000).toFixed(0)} m cells).`,
+      `Amplitudes scale with magnitude through a Brune spectrum at ${hz(F0)} Hz, calibrated to about 1.5 cm/s at 20 km for magnitude 5 on the 61 km`,
+      "slice (bigger slices by the scaling of the elastic equations), converted from 2D toward 3D (half-differentiated, then",
       "amplitude x sqrt(20 km / distance)). Added noise is synthetic (microseism near 0.2 Hz plus local noise) at the level chosen for each station.",
       shareLink ? `The setup, to open again: ${shareLink}` : "",
       sources.length ? `Noise sources, simulated with the quake (random vertical forces on the surface, their waves in m/s, no 3D correction): ${sources.map((q) => `${KINDS[q.kind].name.toLowerCase()} at ${(q.x * H).toFixed(1)} km (${units(q.level, "m/s")} RMS at 1 km)`).join(", ")}.` : "No noise sources.",
@@ -741,7 +732,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     tool = v as Tool;
     $("qDrawRow").hidden = tool !== "draw";
     $("qBrushRow").hidden = tool === "fault" || tool === "blast";
-    $("qFaultPane").hidden = mystery || tool === "blast"; $("qBlastPane").hidden = tool !== "blast";
+    $("qFaultPane").hidden = tool === "blast"; $("qBlastPane").hidden = tool !== "blast";
     log(tool === "fault" ? "Drag across the ground to draw a fault; click a fault to start its rupture there; drag the star to move the start" : tool === "blast" ? "Click under the ground to set off the explosion" : tool === "dig" ? "Drag over the ground to dig it away, or dig caves underground" : "Drag to draw the rock; draw in the sky to build a mountain");
   });
   $<HTMLSelectElement>("qRock").addEventListener("change", (e) => { rockId = (e.target as HTMLSelectElement).value; showRock(); });
@@ -814,44 +805,22 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   on("qScale", "scale", (v) => { trueSize = v === "true"; });
   on("qLook", "look", (v) => { look = v as Look; });
   const loEl = $<HTMLInputElement>("qLo"), hiEl = $<HTMLInputElement>("qHi");
-  const hz = (f: number) => (f < 1 ? f.toFixed(2) : f.toFixed(1));
   function showFilter() {
     const id = $<HTMLSelectElement>("qFilter").value, preset = FILTERS.find((f) => f[0] === id)!;
     $("qBand").hidden = id !== "custom";
     if (id === "custom") {
-      let lo = 10 ** +loEl.value, hi = 10 ** +hiEl.value;
+      // the sliders cover 0.05 to 10 Hz on the 61 km slice, and follow its scale
+      let lo = 10 ** +loEl.value / SCALE, hi = 10 ** +hiEl.value / SCALE;
       if (hi <= lo * 1.2) hi = lo * 1.2;
       band = { lo: +hz(lo), hi: +hz(hi) };
-    } else band = { lo: preset[1], hi: preset[2] };
-    $("qLoOut").textContent = `${hz(10 ** +loEl.value)} Hz`; $("qHiOut").textContent = `${hz(10 ** +hiEl.value)} Hz`;
+    } else { const [lo, hi] = corners(preset); band = { lo, hi }; }
+    $("qLoOut").textContent = `${hz(10 ** +loEl.value / SCALE)} Hz`; $("qHiOut").textContent = `${hz(10 ** +hiEl.value / SCALE)} Hz`;
   }
   $("qFilter").addEventListener("change", showFilter);
   loEl.addEventListener("input", showFilter); hiEl.addEventListener("input", showFilter);
   $<HTMLInputElement>("qZero").addEventListener("change", (e) => { zeroPhase = (e.target as HTMLInputElement).checked; });
   $("qDownload").addEventListener("click", download);
   $("qShare").addEventListener("click", () => { void share(); });
-  /** Open a lesson: its setup as a scenario, its question in the side panel. */
-  function lesson(l: Lesson) {
-    const cell = (x: number, d: number): [number, number] => [Math.round(x / H) + SPONGE, Math.round(d / H) + SKY];
-    const f = l.fault;
-    setMystery(!!l.mystery);
-    open({
-      v: 1, preset: l.preset, rocks: [], runs: [], start: true,
-      faults: f ? [{ a: cell(...f.from), b: cell(...f.to), magnitude: f.magnitude, start: 0.85, speed: 0.8, slip: f.slip }] : [],
-      chosen: f ? 0 : -1, kind: l.blast ? "blast" : "quake", blast: l.blast?.id ?? blast.id, at: l.blast ? cell(...l.blast.at) : [0, 0],
-      stations: l.stations.map((km) => Math.round(km / H)), noise: l.stations.map(() => 0), sources: [],
-    });
-    $("qTask").textContent = l.task;
-    log(l.name);
-  }
-  function setMystery(on: boolean) {
-    mystery = on;
-    $<HTMLInputElement>("qMystery").checked = on;
-    $("qFaultPane").hidden = on || tool === "blast";
-    if (!on && hasSource) log("Here it is: compare with where you thought the quake was");
-  }
-  $<HTMLSelectElement>("qLesson").addEventListener("change", (e) => { const i = (e.target as HTMLSelectElement).value; if (i) lesson(LESSONS[+i]); });
-  $<HTMLInputElement>("qMystery").addEventListener("change", (e) => setMystery((e.target as HTMLInputElement).checked));
   on("qMode", "mode", (v) => { mode = +v; });
   const speedEl = $<HTMLInputElement>("qSpeed"), glowEl = $<HTMLInputElement>("qGlow");
   const showSpeed = () => { speed = +speedEl.value; $("qSpeedOut").textContent = sim ? `${(speed * sim.dt * 60).toFixed(1)} s per second` : String(speed); };
@@ -864,11 +833,30 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   $("qReplay").addEventListener("click", replay);
   $("qUndo").addEventListener("click", undo);
   $("qRedo").addEventListener("click", redo);
+  /** Change the slice's size: the same grid, cells and waves scaled (see ground.ts and Sim.setScale). */
+  function setSize(k: number) {
+    if (k === SCALE || !SCALES.includes(k)) return;
+    setScale(k); scaled();
+    sim?.setScale(H, F0);
+    noiseUnit.forEach((u, s) => { u[0] = noiseTrace(101 + 7 * s, MAX_S * SPS + 1); u[1] = noiseTrace(907 + 13 * s, MAX_S * SPS + 1); });
+    halfDone.forEach((d) => d.fill(0));
+    if (SCALE !== 1) sources = [];
+    showSize(); showSpeed();
+    $<HTMLSelectElement>("qFilter").querySelectorAll("option").forEach((o, q) => { o.textContent = filterName(FILTERS[q]); });
+    showFilter(); $("qFgrid").textContent = hz(F_GRID);
+    loadPreset(presetId);
+  }
+  function showSize() {
+    segmented($("qSize"), "size", String(SCALE));
+    $("qSizeNote").textContent = `${WIDTH_KM.toFixed(0)} km across, ${DEPTH_KM.toFixed(0)} km deep: ${(H * 1000).toFixed(0)} m cells, waves near ${hz(F0)} Hz` +
+      (SCALE === 1 ? "." : `. A bigger slice has longer waves, so it shows less detail, and its peaks and intensities count only these slow waves: near a big quake the real shaking (strongest at 1 to 10 Hz) is harder. Noise sources need the ${Math.round(W * 0.08)} km slice.`);
+  }
+  on("qSize", "size", (v) => setSize(+v));
   $("qReset").addEventListener("click", () => { loadPreset(presetId); log(`${preset.name}: the ground is back as it was`); });
   $<HTMLInputElement>("qLabels").addEventListener("change", (e) => { labels = (e.target as HTMLInputElement).checked; });
 
   segmented($("qTool"), "tool", tool); segmented($("qMode"), "mode", "0");
-  segmented($("qMeasure"), "measure", measure); segmented($("qComp"), "comp", comp); segmented($("qScale"), "scale", "fit"); segmented($("qLook"), "look", look); showFilter();
+  segmented($("qMeasure"), "measure", measure); segmented($("qComp"), "comp", comp); segmented($("qScale"), "scale", "fit"); segmented($("qLook"), "look", look); showFilter(); showSize();
   $<HTMLSelectElement>("qRock").value = rockId; $<HTMLSelectElement>("qBlast").value = blast.id;
   showBrush(); showSpeed(); showGlow(); showCustom(); showFault(); showBlast();
   $("qNote").textContent = preset.note;
@@ -893,28 +881,21 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     const tick = (x0: number, y0: number, x1: number, y1: number) => { c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); };
     c.strokeStyle = INK; c.lineWidth = 1; c.strokeRect(L - 0.5, T - 0.5, iw + 1, ih + 1);
     c.font = MONO(10); c.fillStyle = MUTED; c.strokeStyle = MUTED; c.textBaseline = "bottom";
-    for (let km = 0; km <= WIDTH_KM; km += 10) {
+    for (let km = 0; km <= WIDTH_KM; km += 10 * SCALE) {
       const x = X(km / H);
       tick(x, T - 4, x, T);
       c.textAlign = km === 0 ? "left" : "center";
       c.fillText(km === 0 ? (iw > 520 ? "0 km across" : "0 km") : String(km), x, T - 6);
     }
     c.textAlign = "right"; c.textBaseline = "middle";
-    for (let d = 0; d <= DEPTH_KM; d += 5) {
+    for (let d = 0; d <= DEPTH_KM; d += 5 * SCALE) {
       const y = Y(SKY + d / H);
       tick(L - 4, y, L, y);
       c.fillText(d === 0 ? "0 km" : String(d), L - 7, y);
     }
-    c.save(); c.translate(11, Y(SKY + 15 / H)); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText("depth", 0, 0); c.restore();
+    c.save(); c.translate(11, Y(SKY + (15 * SCALE) / H)); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText("depth", 0, 0); c.restore();
     c.save();
     c.beginPath(); c.rect(L, T, iw, ih); c.clip();
-    // a mystery quake: the waves (and below, the source) are hidden, so only the seismograms can tell where it is
-    if (mystery) {
-      c.fillStyle = PAPER; c.fillRect(L, T, iw, ih);
-      c.textAlign = "center"; c.textBaseline = "middle";
-      const lines: [string, string][] = [["Mystery quake", INK], ["Its source and waves are hidden.", MUTED], ["Find it from S − P at each seismometer,", MUTED], ["then untick Mystery to check.", MUTED]];
-      lines.forEach(([text, colour], q) => { c.font = q ? MONO(Math.min(11, iw / 34)) : MONO(Math.min(13, iw / 20)); label(c, text, L + iw / 2, T + ih * 0.32 + q * 17, colour); });
-    }
     // the ground surface
     c.beginPath();
     for (let x = 0; x < W; x++) { const y = Y(top[x]); if (x === 0) c.moveTo(X(0), y); c.lineTo(X(x + 0.5), y); }
@@ -936,7 +917,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       if (ny > 0.01 || (Math.abs(ny) <= 0.01 && nx < 0)) { nx = -nx; ny = -ny; }
       return [nx, ny] as const;
     };
-    for (const f of mystery ? [] : faults) {
+    for (const f of faults) {
       // the fault itself, soft: the part that slips is drawn over it in rust
       const mine = f === chosen;
       c.strokeStyle = mine ? "rgba(37,39,34,0.7)" : "rgba(37,39,34,0.4)"; c.lineWidth = 2.5; c.lineCap = "round";
@@ -946,7 +927,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       c.setLineDash([6, 4]); c.strokeStyle = INK; c.lineWidth = 2;
       tick(FX(drag.from[0]), FY(drag.from[1]), FX(drag.to[0]), FY(drag.to[1])); c.setLineDash([]);
     }
-    if (rupture && sim && !mystery) {
+    if (rupture && sim) {
       const f = rupture.fault, { tx, tz } = frame(f), now = Math.max(0, sim.step * sim.dt - sim.t0);
       // how far the rupture front has run each way (it slows where the rock is soft)
       let lo = rupture.at, hi = rupture.at;
@@ -960,12 +941,12 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     }
     c.lineCap = "butt";
     // the faults' names, on the upper side, clear of the line
-    if (labels && !mystery) for (const f of faults) {
+    if (labels) for (const f of faults) {
       const { dip } = frame(f), [nx, ny] = upward(f);
       beside(`${f.slip} fault · M ${f.magnitude.toFixed(1)} · ${dip}°`, FX((f.a[0] + f.b[0]) / 2), FY((f.a[1] + f.b[1]) / 2), nx, ny, f === chosen ? INK : MUTED);
     }
     // where the chosen fault's rupture starts: a handle to drag along it, its name on the lower side
-    if (chosen && !mystery) {
+    if (chosen) {
       const { len, tx, tz } = frame(chosen), s0 = chosen.start * len, hx = FX(chosen.a[0] + tx * s0), hy = FY(chosen.a[1] + tz * s0);
       c.beginPath(); c.arc(hx, hy, 9, 0, 2 * Math.PI); c.fillStyle = "#faf9f6"; c.fill();
       c.strokeStyle = RUST; c.lineWidth = 2; c.stroke();
@@ -1006,7 +987,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     });
     // the quake: focus underground, epicentre on the surface above it
     const qx = quakeAt[0] - SPONGE, fx = X(qx + 0.5), fy = Y(quakeAt[1] + 0.5);
-    if (hasSource && !mystery && qx >= 0 && qx < W) {
+    if (hasSource && qx >= 0 && qx < W) {
       const ey = Y(top[qx]);
       if (labels) {
         c.setLineDash([3, 3]); c.strokeStyle = "rgba(164,70,42,0.7)"; c.lineWidth = 1; tick(fx, ey, fx, fy - 8); c.setLineDash([]);
@@ -1059,7 +1040,8 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     const L = 64, R = 6, T = 22, B = 22, iw = w - L - R, rowH = (h - T - B) / Math.max(1, nst);
     const now = sim ? Math.max(0, sim.step * sim.dt - sim.t0) : 0;
     // the time axis: 30 s, growing in steps of 10 s while recording, then fitted to the whole record
-    const span = Math.max(AXIS_S, ended ? now : Math.ceil((now + 0.01) / 10) * 10), every = span <= 40 ? 5 : span <= 80 ? 10 : 20;
+    const grow = 10 * SCALE, span = Math.max(AXIS_S, ended ? now : Math.ceil((now + 0.01) / grow) * grow);
+    const every = [1, 2, 5, 10, 20, 50, 100, 200, 500].find((d) => span / d <= 8) ?? 1000;
     const tx = (t: number) => L + (Math.min(t, span) / span) * iw;
     const [, base, measured] = MEASURES[measure];
     const what = `${look === "spec" ? "spectra of " : look === "sgram" ? "spectrogram of " : ""}${measured}`;
@@ -1100,10 +1082,10 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       c.fillText(NAMES[s], 0, mid - 7);
       c.font = MONO(10); c.fillStyle = MUTED;
       // distances from the quake, once there is one; until then, where the seismometer stands
-      const there = hasSource && !mystery ? `${distance(s).toFixed(0)} km` : `at ${(stationsX[s] * H).toFixed(0)}`;
+      const there = hasSource ? `${distance(s).toFixed(0)} km` : `at ${(stationsX[s] * H).toFixed(0)}`;
       c.fillText(there, 0, mid + 9);
       const dist = $("qStations").querySelector(`[data-dist="${s}"]`);
-      if (dist) dist.textContent = hasSource && !mystery ? `${distance(s).toFixed(1)} km` : `at ${(stationsX[s] * H).toFixed(1)} km`;
+      if (dist) dist.textContent = hasSource ? `${distance(s).toFixed(1)} km` : `at ${(stationsX[s] * H).toFixed(1)} km`;
       if (!sim) continue;
       const v = shown[s], scale = (rowH * 0.44) / (trueSize ? most : Math.max(peaks[s], most * 0.01));
       const facts: string[] = [];
@@ -1131,7 +1113,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
         if (sp.amp[kp] > 0) facts.push(`strongest at ${sp.f[kp].toFixed(sp.f[kp] < 1 ? 2 : 1)} Hz`);
       } else if (look === "sgram" && n > 256) {
         // power in 2.56 s windows, on a log frequency axis from 0.2 to 10 Hz, 50 dB from the row's (or all rows') top
-        const g = spectrogram(v, SPS, n), F0g = 0.2, rows = 64, img = new ImageData(g.rows.length, rows);
+        const g = spectrogram(v, SPS, n), F0g = 0.2 / SCALE, rows = 64, img = new ImageData(g.rows.length, rows);
         let pmax = 1e-60; for (const p of g.rows) for (let k = 1; k < p.length; k++) pmax = Math.max(pmax, p[k]);
         if (trueSize) pmax = Math.max(pmax, (most / Math.max(1e-30, peaks[s])) ** 2 * pmax);
         g.rows.forEach((p, col) => {
@@ -1146,7 +1128,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
         c.imageSmoothingEnabled = true; c.drawImage(off, x0, y0 + 12, x1 - x0, rowH - 16);
         const fy = (f: number) => y0 + 12 + (1 - Math.log(f / F0g) / Math.log(FMAX / F0g)) * (rowH - 16);
         c.font = MONO(9); c.textAlign = "left"; c.textBaseline = "middle";
-        for (const f of [1, 5]) { c.strokeStyle = "rgba(37,39,34,0.25)"; c.setLineDash([2, 3]); c.beginPath(); c.moveTo(L, fy(f)); c.lineTo(L + iw, fy(f)); c.stroke(); c.setLineDash([]); label(c, `${f} Hz`, L + 3, fy(f), MUTED); }
+        for (const f of [1 / SCALE, 5 / SCALE]) { c.strokeStyle = "rgba(37,39,34,0.25)"; c.setLineDash([2, 3]); c.beginPath(); c.moveTo(L, fy(f)); c.lineTo(L + iw, fy(f)); c.stroke(); c.setLineDash([]); label(c, `${hz(f)} Hz`, L + 3, fy(f), MUTED); }
       }
       c.restore();
       // one line per row: S - P and distance, then the peak and the intensity
@@ -1172,7 +1154,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       if (Number.isFinite(Rt) && now >= Rt && Rt < span && Rt > (Number.isFinite(S) ? S : P) + 0.3) mark(Rt, ACCENT, "R");
       if (Number.isFinite(S) && now >= S) {
         mark(S, NAVY, "S");
-        say(mystery ? `S − P = ${(S - P).toFixed(1)} s → how far?` : `S − P = ${(S - P).toFixed(1)} s → about ${Math.round((S - P) * KM_PER_S)} km away`, INK);
+        say(`S − P = ${(S - P).toFixed(1)} s → about ${Math.round((S - P) * KM_PER_S)} km away`, INK);
       } else if (!Number.isFinite(S) && Number.isFinite(P) && now >= P * 1.8) say("no S wave: liquid in the way", NAVY);
       else say();
     }
@@ -1193,7 +1175,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       }
       // the noise sources' waves in the picture: true size next to the quake, or bright enough to see
       const loudest = Math.max(0, ...sources.map((q) => q.level));
-      sim.setNoiseMix(loudest ? Math.max(1 / (K * size(sourceMagnitude(), F0)), NOISE_SHOW / loudest) : 0);
+      sim.setNoiseMix(loudest ? Math.max(1 / amp(), NOISE_SHOW / loudest) : 0);
       if (sim.warming > 0) { if (playing) sim.warm(WARM_STEPS); }
       else if (playing) {
         // stop once the quake's waves have gone (see planEnd and quiet), or at the end of the record space
@@ -1208,7 +1190,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       // bigger quakes look a little brighter (their true range is far too wide to show); a rupture spreads its
       // moment over many small sources, so the picture is brightened to match (the seismograms are not)
       const bright = Math.min(3, Math.max(0.35, size(sourceMagnitude(), F0) ** 0.2));
-      sim.render({ mode, glow: glow * bright * (rupture ? Math.min(4, 0.5 * Math.sqrt(rupture.parts)) : 1), exag: EXAG });
+      sim.render({ mode, glow: (glow * bright * (rupture ? Math.min(4, 0.5 * Math.sqrt(rupture.parts)) : 1)) / SCALE, exag: EXAG / SCALE ** 2 });
       drawOver();
       drawSeis();
     },

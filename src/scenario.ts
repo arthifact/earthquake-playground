@@ -5,6 +5,7 @@
 export interface ScenarioFault { a: [number, number]; b: [number, number]; magnitude: number; start: number; speed: number; slip: "normal" | "reverse" }
 export interface Scenario {
   v: 1;
+  scale?: number;                       // the slice's size (ground.ts SCALES; 1 if missing)
   preset: string;
   /** Rocks used by the changes: [vp, vs, rho]. */
   rocks: [number, number, number][];
