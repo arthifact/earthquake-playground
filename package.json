@@ -1,0 +1,18 @@
+{
+  "name": "earthquake_playground",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Earthquakes for the classroom: start a quake, watch P, S and surface waves on the GPU, read the seismograms.",
+  "scripts": {
+    "dev": "vite --port 5177",
+    "build": "tsc --noEmit && vite build --base ./",
+    "check": "tsc --noEmit",
+    "preview": "vite preview --port 5180 --strictPort"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}

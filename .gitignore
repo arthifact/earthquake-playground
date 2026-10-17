@@ -1,0 +1,6 @@
+node_modules
+dist
+.DS_Store
+# validation outputs: grids, runs and metrics (about 100 MB); regenerate with validation/run_all.sh
+validation/out
+validation/__pycache__
