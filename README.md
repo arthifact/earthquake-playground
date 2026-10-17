@@ -70,3 +70,7 @@ src/
 Validation against SPECFEM2D and an exact solution of Lamb's problem: `validation/README.md`.
 
 Cross sections through a region's map are set aside for a later, better version: `later/region.ts` (not built).
+
+## License
+
+MIT (see LICENSE). Live site: https://arthifact.github.io/earthquake-playground/
