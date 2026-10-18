@@ -196,7 +196,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
 
   let sim: Sim | null = null;
   let presetId = "subduction", preset: Preset = PRESETS[presetId];
-  setGrid(preset.width, preset.depth); scaled();
+  setGrid(preset.width, preset.depth, preset.sky); scaled();
   let ground = build(preset);
   let sources: { kind: KindId; x: number; level: number; j: number }[] = [];
   let tool: Tool = "source", mode = 0, kind: "quake" | "blast" = "quake", speed = 7, glow = 1, brush = 1, labels = true, playing = true;
@@ -418,10 +418,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     $("qNote").textContent = preset.cite; $("qAbout").textContent = `${preset.note} ${preset.about}`;
     if (!keep) {
       const k = preset.fault;
-      if (k) {
-        const r = (k.dip * Math.PI) / 180;
-        q = { x: k.x + 0.5 * k.length * k.toward * Math.cos(r), d: k.top + 0.5 * k.length * Math.sin(r), mw: k.magnitude, dip: k.dip, toward: k.toward, slip: k.slip, length: null, dir: "both", speed: 0.8 };
-      }
+      if (k) q = { x: k.x, d: k.d, mw: k.magnitude, dip: k.dip, toward: k.toward, slip: k.slip, length: null, dir: k.dir, speed: 0.8 };
       blastAt = [preset.width / 2, 1];
     }
     if (!sim) return;
@@ -858,7 +855,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   async function setSize(widthKm: number, depthKm: number, keep = true, stationsKm?: number[]) {
     const my = ++building;
     stationsKm ??= keep ? stationsX.map((x) => x * H - shift()) : undefined;
-    setGrid(widthKm, depthKm); scaled();
+    setGrid(widthKm, depthKm, preset.sky); scaled();
     top = new Int32Array(W);
     await makeSim();
     if (my !== building) return;

@@ -9,17 +9,19 @@ import { PAPER_RGB, earth, hex, mix, type RGB } from "./plot";
  *  as fast: a bigger slice has bigger cells (H km) and longer waves. SCALE is H / 80 m (the 61 × 29 km slice). */
 export const MIN_KM = 10, MAX_KM = 1000, MIN_DEPTH = 5, MAX_DEPTH = 600;
 const CELLS = 768 * 360;
-export const SKY = 40, SPONGE = 50;          // rows of sky above sea level; absorbing cells at the sides and bottom
+export const SPONGE = 50;                    // absorbing cells at the sides and the bottom
+export let SKY = 40;                         // rows of sky above sea level (enough for the model's highest ground)
 export let W = 768, VH = 400;                // cells on screen (VH includes the sky)
 export let NX = W + 2 * SPONGE, NZ = VH + SPONGE;
 export let SCALE = 1, H = 0.08;              // km per cell
 export let WIDTH_KM = W * H, DEPTH_KM = (VH - SKY) * H;
 /** Size the slice: width and depth (km), clamped to what the grid can hold. */
-export function setGrid(widthKm: number, depthKm: number) {
+export function setGrid(widthKm: number, depthKm: number, skyKm = 3) {
   const w = Math.min(MAX_KM, Math.max(MIN_KM, widthKm)), d = Math.min(MAX_DEPTH, Math.max(MIN_DEPTH, depthKm));
   let h = Math.sqrt((w * d) / CELLS);
   // no side of more than 2048 cells or fewer than 96
   h = Math.max(h, w / 2048, d / 2048); h = Math.min(h, w / 96, d / 96);
+  SKY = Math.max(16, Math.ceil(skyKm / h) + 2);
   W = Math.round(w / h); VH = Math.round(d / h) + SKY;
   NX = W + 2 * SPONGE; NZ = VH + SPONGE;
   H = h; SCALE = h / 0.08; WIDTH_KM = W * H; DEPTH_KM = (VH - SKY) * H;
@@ -50,9 +52,9 @@ export const ROCK = {
 export type RockId = keyof typeof ROCK;
 export const VMAX = 8.1;
 
-/** A fault a model is known for: its upper end at x km from the model's left edge and top km deep, its dip (degrees)
- *  toward +x (toward 1) or -x (-1), its length (km), magnitude and slip. */
-export interface KnownFault { x: number; top: number; dip: number; toward: 1 | -1; length: number; magnitude: number; slip: "normal" | "reverse" }
+/** The earthquake a model is known for: its hypocentre (x km from the model's left edge, d km deep), the dip of its
+ *  fault (degrees) toward +x (toward 1) or -x (-1), moment magnitude, slip, and which way the rupture ran. */
+export interface KnownFault { x: number; d: number; dip: number; toward: 1 | -1; magnitude: number; slip: "normal" | "reverse"; dir: "up" | "both" | "down" }
 /** A model template: a real setting in kilometres, from x = 0 to its natural width; a slice of another width centres
  *  it and carries its edges on (it is never stretched). */
 export interface Preset {
@@ -62,9 +64,23 @@ export interface Preset {
   about: string;                            // what it is based on (shown folded)
   width: number;                            // natural width (km)
   depth: number;                            // natural depth (km)
+  sky: number;                              // height (km) the sky must reach: its highest ground and a margin
   fault?: KnownFault;
   noise?: Partial<Record<KindId, number>>;  // where noise sources of each kind belong (km), such as a coast
   at(x: number, d: number): Rock;           // the rock at x (km) and depth d (km below sea level, negative is up)
+}
+
+/** S speed (km/s) from P speed in crustal rock: Brocher (2005), BSSA 95, 2081, "regression fit" (1.5 to 8 km/s). */
+export const brocherVs = (vp: number) => 0.7858 - 1.2344 * vp + 0.7949 * vp ** 2 - 0.1238 * vp ** 3 + 0.0064 * vp ** 4;
+/** Density (g/cm³) from P speed: Brocher (2005) eq. 1, the Nafe-Drake curve (1.5 to 8.5 km/s). */
+export const brocherRho = (vp: number) => 1.6612 * vp - 0.4721 * vp ** 2 + 0.0671 * vp ** 3 - 0.0043 * vp ** 4 + 0.000106 * vp ** 5;
+/** A crustal rock of P speed vp, its S speed and density from Brocher (2005). Where S would be slower than the grid's
+ *  1.6 km/s, it is stiffened to that and P with it, to keep Vp / Vs at least 1.75 (a softer rock with S at 1.6 km/s
+ *  would otherwise have an impossible Poisson's ratio). */
+export function crustal(name: string, vp: number) {
+  let vs = brocherVs(vp);
+  if (vs < 1.6) { vs = 1.6; vp = Math.max(vp, 2.8); }
+  return rock(name, Math.round(vp * 100) / 100, Math.round(vs * 100) / 100, Math.round(brocherRho(vp) * 100) / 100);
 }
 
 /** Rocks made by the templates (velocity gradients, named layers), so the readout can name them. */
