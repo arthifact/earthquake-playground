@@ -205,6 +205,13 @@ export class Sim {
     this.reset();
   }
 
+  /** Free the GPU memory (buffers and textures); the engine cannot be used after this. */
+  destroy() {
+    this.gen++;
+    for (const b of Object.values(this.b)) b.destroy();
+    this.tex.wave.destroy(); this.tex.rock.destroy();
+  }
+
   /** A new ground: speeds (km/s) and density (g/cm³) on the whole grid; P speed 0 is air. Optionally how fast
    *  the rock takes energy from the waves (attenuation), as the rate their amplitude falls (1/s) in each cell. */
   setGround(vp: Grid, vs: Grid, rho: Grid, colour: Colour, loss?: Float32Array) {

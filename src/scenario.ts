@@ -5,7 +5,10 @@
 export interface ScenarioFault { a: [number, number]; b: [number, number]; magnitude: number; start: number; speed: number; slip: "normal" | "reverse" }
 export interface Scenario {
   v: 1;
-  scale?: number;                       // the slice's size (ground.ts SCALES; 1 if missing)
+  scale?: number;                       // older links: the slice's scale (1 is 61 × 29 km)
+  width?: number; depth?: number;       // the slice (km)
+  quake?: { x: number; d: number; mw: number; dip: number; toward: 1 | -1; slip: "normal" | "reverse"; length: number | null; dir: "up" | "both" | "down"; speed: number };
+  blastAt?: [number, number];
   preset: string;
   /** Rocks used by the changes: [vp, vs, rho]. */
   rocks: [number, number, number][];
@@ -16,7 +19,7 @@ export interface Scenario {
   kind: "quake" | "blast";
   blast: string;                        // explosion id
   at: [number, number];                 // the explosion's cell
-  stations: number[];                   // columns on screen
+  stations: number[];                   // km along the model (older links: columns on screen)
   noise: number[];                      // added noise per seismometer (m/s)
   sources: [string, number, number][];  // noise sources: kind, column, level
   start: boolean;                       // start the quake when the link opens

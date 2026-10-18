@@ -33,9 +33,11 @@ const continent = (d: number, moho: number) => d < 0.4 * moho ? UPPER : d < 0.65
 export const PRESETS: Record<string, Preset> = {
   crust: {
     name: "Continental crust",
+    cite: "CRUST1.0 · AK135",
     note: "The average continent: sediments, upper, middle and lower crust, and the mantle below a Moho near 38 km.",
     about: "Layer thicknesses and speeds of the global average continental crust in CRUST1.0 (Laske et al., 2013), with the AK135 mantle (Kennett et al., 1995). The Moho undulates gently.",
     width: 200,
+    depth: 60,
     fault: { x: 80, top: 2, dip: 60, toward: 1, length: 30, magnitude: 6.8, slip: "normal" },
     at: (x, d) => {
       if (d < 0) return AIR;
@@ -46,9 +48,11 @@ export const PRESETS: Record<string, Preset> = {
 
   subduction: {
     name: "Subduction zone · Chile",
+    cite: "Maule 2010 · Slab2",
     note: "The Nazca plate dives under South America: ocean, trench, slab, Andes. The megathrust is ready to slip.",
     about: "Central Chile near the 2010 Maule earthquake (Mw 8.8). Slab shape after Slab2 (Hayes et al., 2018): about 10° at the trench, steepening to 30° and more at depth. Trench 6.5 km deep, coast 120 km east of it, Andes about 4.5 km high, crust up to 65 km thick beneath them. Oceanic crust 7 km thick (basalt over gabbro).",
     width: 600,
+    depth: 250,
     fault: { x: 150, top: 6.5, dip: 17, toward: 1, length: 148, magnitude: 8.8, slip: "reverse" },
     noise: { ocean: 230 },
     at: (x, d) => {
@@ -74,9 +78,11 @@ export const PRESETS: Record<string, Preset> = {
 
   himalaya: {
     name: "Himalayan front · Nepal",
+    cite: "Gorkha 2015 · Elliott et al. 2016",
     note: "India pushes under the Himalaya along the Main Himalayan Thrust, beneath the Ganges plain and Kathmandu.",
     about: "A section through central Nepal near the 2015 Gorkha earthquake (Mw 7.8): the Main Himalayan Thrust rises gently (about 7°) to the Main Frontal Thrust, with a steeper ramp under the high range (Elliott et al., 2016). Foreland sediments up to 5 km, Siwalik hills, Lesser and Greater Himalaya, Tibet at about 5 km; the Moho deepens from 38 km under India to 75 km under Tibet. Kathmandu sits on a soft lake-bed basin.",
     width: 300,
+    depth: 110,
     fault: { x: 110, top: 3.8, dip: 10, toward: 1, length: 76, magnitude: 7.8, slip: "reverse" },
     at: (x, d) => {
       const front = 78;
@@ -103,9 +109,11 @@ export const PRESETS: Record<string, Preset> = {
 
   rift: {
     name: "East African Rift · Kenya",
+    cite: "KRISP · Mechie et al. 1997",
     note: "The continent pulls apart: a graben between normal faults, filled with lava and sediments, over thinned crust.",
     about: "The central Kenya Rift: a graben about 60 km wide whose floor lies about 1 km below its shoulders, filled with 3 to 4 km of volcanic and sedimentary rock, between border normal faults dipping about 60°. The crust thins from 38 km to about 28 km beneath the rift, over hot, slow mantle (KRISP; Mechie et al., 1997).",
     width: 200,
+    depth: 100,
     fault: { x: 72, top: 0, dip: 60, toward: 1, length: 16, magnitude: 7.0, slip: "normal" },
     at: (x, d) => {
       const inside = smooth(66, 74, x) * (1 - smooth(126, 134, x));
@@ -123,9 +131,11 @@ export const PRESETS: Record<string, Preset> = {
 
   la: {
     name: "Los Angeles basin",
+    cite: "SCEC CVM · Northridge 1994",
     note: "A deep sedimentary basin under a city, with a blind thrust like the one of the 1994 Northridge earthquake.",
     about: "A south–north section after the SCEC Community Velocity Model (Shaw et al., 2015): the basin is up to about 8.5 km deep and deepest to the north, its sediments stiffening with depth; the Palos Verdes hills to the south, the Santa Monica Mountains to the north. Its slowest sediments are slower than the grid can carry (stiffened to 1.6 km/s). The fault is a Northridge-like blind thrust dipping about 35°.",
     width: 80,
+    depth: 40,
     fault: { x: 62, top: 5, dip: 35, toward: -1, length: 26, magnitude: 6.7, slip: "reverse" },
     at: (x, d) => {
       const elev = 0.05 + 0.4 * bump(x, 8, 4) + 0.85 * bump(x, 64, 6) + 0.25 * smooth(70, 80, x);
@@ -138,9 +148,11 @@ export const PRESETS: Record<string, Preset> = {
 
   salt: {
     name: "Gulf Coast salt basin",
+    cite: "Gulf of Mexico · Hudec and Jackson 2007",
     note: "Thick sediments with salt rising in diapirs from a buried salt layer: waves speed up in the salt and bend round it.",
     about: "After sections of the northern Gulf of Mexico (Hudec and Jackson, 2007): sediments stiffening with depth to about 12 km, the Jurassic (Louann) salt layer near 11 km, two diapirs rising to 2 to 3 km with overhanging caps, and a detached salt sheet. Salt carries P waves at about 4.5 km/s; the sediments around it are slower.",
     width: 100,
+    depth: 30,
     fault: { x: 48, top: 0.5, dip: 50, toward: 1, length: 9, magnitude: 5.5, slip: "normal" },
     at: (x, d) => {
       if (d < 0) return AIR;
@@ -159,9 +171,11 @@ export const PRESETS: Record<string, Preset> = {
 
   ridge: {
     name: "Mid-ocean ridge · Atlantic",
+    cite: "Mid-Atlantic Ridge",
     note: "New ocean floor forms at the ridge and sinks as it cools and moves away; the rift valley has its own faults.",
     about: "The slow-spreading Mid-Atlantic Ridge: sea floor 2.6 km deep at the ridge, deepening as the square root of its age (about 1.2 cm/yr each way), with a rift valley about 1.2 km deep. Oceanic crust 6.5 km thick (basalt over gabbro), partly molten beneath the axis, over a lithosphere that thickens with age above hot mantle (Parsons and Sclater, 1977; White et al., 1992).",
     width: 200,
+    depth: 60,
     fault: { x: 94, top: 3.8, dip: 55, toward: 1, length: 8, magnitude: 5.8, slip: "normal" },
     noise: { ocean: 40 },
     at: (x, d) => {
@@ -178,9 +192,11 @@ export const PRESETS: Record<string, Preset> = {
 
   volcano: {
     name: "Stratovolcano · Etna-type",
+    cite: "Etna · Patanè et al. 2006",
     note: "A cone of lavas over a magma reservoir: liquid magma stops S waves and leaves a shadow behind it.",
     about: "After Mount Etna: a cone of lavas about 40 km wide (here 2.9 km high, a little lower than Etna's 3.3, to fit the sky), over sedimentary basement; a magma reservoir at about 6 to 10 km depth and a smaller one near 3 km, joined by a conduit (Patanè et al., 2006).",
     width: 60,
+    depth: 30,
     fault: { x: 18, top: 0.5, dip: 70, toward: -1, length: 6, magnitude: 5.3, slip: "normal" },
     at: (x, d) => {
       const elev = 2.9 * Math.max(0, 1 - Math.abs(x - 30) / 20) ** 1.4;
@@ -194,9 +210,11 @@ export const PRESETS: Record<string, Preset> = {
 
   alpine: {
     name: "Alpine valley · Grenoble",
+    cite: "Grenoble basin · Chaljub et al. 2010",
     note: "A glacial valley filled with soft lake sediments between limestone and crystalline massifs: the valley rings.",
     about: "After the Grenoble basin in the French Alps (Chaljub et al., 2010): a U-shaped glacial valley filled with up to about 900 m of soft lacustrine sediments, between the Vercors limestone to the west and the Belledonne crystalline massif to the east. The real fill is far slower (S at 0.3 to 0.8 km/s) than the grid can carry, so it is stiffened to 1.6 km/s.",
     width: 40,
+    depth: 20,
     fault: { x: 25, top: 1, dip: 70, toward: 1, length: 8, magnitude: 5.0, slip: "normal" },
     at: (x, d) => {
       const elev = 0.21 + 1.4 * (1 - smooth(10, 16.5, x)) + 1.7 * smooth(23.5, 30, x);
@@ -210,9 +228,11 @@ export const PRESETS: Record<string, Preset> = {
 
   plain: {
     name: "Half-space (uniform rock)",
+    cite: "Lamb's problem",
     note: "Uniform rock under a flat surface: the textbook case, and the one to check numbers against.",
     about: "Uniform rock with P at 5.6 km/s, S at 3.2 km/s and density 2.6 g/cm³ under a flat free surface: Lamb's problem. Validated against an exact solution and SPECFEM2D (validation/README.md).",
     width: 61.44,
+    depth: 29,
     fault: { x: 20, top: 6, dip: 60, toward: 1, length: 10, magnitude: 6.0, slip: "normal" },
     at: (_x, d) => d < 0 ? AIR : ROCK.rock,
   },

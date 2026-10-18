@@ -18,11 +18,10 @@ const dialog = (id: string, title: string, body: string) =>
 const HELP = `
   <p class="lbl">1 Quake</p>
   <ol class="steps">
-    <li><b>Model template</b>: a real setting (subduction zone, Himalaya, rift, basin, volcano, ridge…), opening at its natural width with the fault it is known for. <b>Width</b> takes any number of km; the grid rescales so it stays real-time (<i>About this model</i> says what it is based on).</li>
-    <li><b>Fault</b>: type its length, dip, top depth and position, or drag across the picture to draw one; <i>Fit to M</i> makes it as long as the magnitude ruptures. Press <b>Start the quake</b> (or <kbd>R</kbd>). <b>Explode</b> sets off a blast instead.</li>
-    <li>Watch <i>P waves</i> (rust and ochre), <i>S waves</i> (navy and teal) and the surface waves; <b>Show</b> switches to <i>Shaking</i> or <i>Particles</i>.</li>
-    <li><b>Seismometers</b> (A to E, drag them along the surface) record in real units, with P, S and R marks, first motions (P↑ up, P↓ down), S − P distance, peak and intensity. <i>Filter and spectra</i> is folded below them. <b>Download</b> saves SAC and CSV; <b>Copy link</b> shares the exact setup.</li>
-    <li><b>Add rock</b> and <b>Dig</b> change the model (draw rock in the sky for a mountain); Undo, Redo, Reset. <b>Noise sources</b> shake the surface all the time.</li>
+    <li><b>Model</b>: a real setting (subduction zone, Himalaya, rift, basin, volcano, ridge…) at its natural size. Type the <b>width × depth</b> on the picture's frame: any size runs in real time (the line under the picture gives the cell size, the highest frequency the grid carries and the time step).</li>
+    <li><b>Earthquake</b>: click the picture to place the hypocentre; it starts at once. Set <b>Mw</b>, <b>dip</b> and <b>slip</b> (thrust or normal); the fault plane and the beachball follow. Drag the star to move it, or the fault's deep end to turn it. <i>Rupture</i> (folded) sets its length, the way it runs and its speed. <b>Explosion</b>: choose a yield and click.</li>
+    <li><b>Seismometers</b> (A to E, drag them along the surface) record velocity, displacement or acceleration, vertical (Z) or along the slice (E), with P, S and R marks, first motions (P↑, P↓), distance, peak and intensity. <b>Download</b> saves SAC and CSV; <b>Copy link</b> shares the exact setup.</li>
+    <li>Folded: <i>Filters and spectra</i>, <i>Display</i>, <i>Edit model</i> (add rock, dig; Undo, Redo, Reset), <i>Noise sources</i>, <i>Key</i>.</li>
   </ol>
   <p class="lbl">2 Wave types</p>
   <ol class="steps"><li>P, S, Love and Rayleigh waves race across 60 km of rock. Follow the rust dots to see how each one moves the ground.</li></ol>

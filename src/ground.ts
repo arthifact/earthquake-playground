@@ -5,17 +5,24 @@
 import type { KindId } from "./noise";
 import { PAPER_RGB, earth, hex, mix, type RGB } from "./plot";
 
-/** The slice's scale: 1 is 80 m cells, 61 km wide, waves at 1.1 Hz; any width from MIN_KM to MAX_KM. */
-export const MIN_KM = 20, MAX_KM = 1000;
-export let SCALE = 1;
-export let H = 0.08;                         // km per cell
-export const W = 768, VH = 400, SKY = 40;    // cells on screen; rows of sky above sea level
-export const SPONGE = 50;
-export const NX = W + 2 * SPONGE, NZ = VH + SPONGE;
+/** The slice: any width and depth (km). The grid keeps about CELLS cells under the surface, so every size runs
+ *  as fast: a bigger slice has bigger cells (H km) and longer waves. SCALE is H / 80 m (the 61 × 29 km slice). */
+export const MIN_KM = 10, MAX_KM = 1000, MIN_DEPTH = 5, MAX_DEPTH = 600;
+const CELLS = 768 * 360;
+export const SKY = 40, SPONGE = 50;          // rows of sky above sea level; absorbing cells at the sides and bottom
+export let W = 768, VH = 400;                // cells on screen (VH includes the sky)
+export let NX = W + 2 * SPONGE, NZ = VH + SPONGE;
+export let SCALE = 1, H = 0.08;              // km per cell
 export let WIDTH_KM = W * H, DEPTH_KM = (VH - SKY) * H;
-/** Scale the slice: cells s × 80 m (the number of cells stays, so it runs as fast). */
-export function setScale(s: number) {
-  SCALE = s; H = 0.08 * s; WIDTH_KM = W * H; DEPTH_KM = (VH - SKY) * H;
+/** Size the slice: width and depth (km), clamped to what the grid can hold. */
+export function setGrid(widthKm: number, depthKm: number) {
+  const w = Math.min(MAX_KM, Math.max(MIN_KM, widthKm)), d = Math.min(MAX_DEPTH, Math.max(MIN_DEPTH, depthKm));
+  let h = Math.sqrt((w * d) / CELLS);
+  // no side of more than 2048 cells or fewer than 96
+  h = Math.max(h, w / 2048, d / 2048); h = Math.min(h, w / 96, d / 96);
+  W = Math.round(w / h); VH = Math.round(d / h) + SKY;
+  NX = W + 2 * SPONGE; NZ = VH + SPONGE;
+  H = h; SCALE = h / 0.08; WIDTH_KM = W * H; DEPTH_KM = (VH - SKY) * H;
 }
 
 export interface Rock { name: string; vp: number; vs: number; rho: number; tint?: string; group?: string }
@@ -50,9 +57,11 @@ export interface KnownFault { x: number; top: number; dip: number; toward: 1 | -
  *  it and carries its edges on (it is never stretched). */
 export interface Preset {
   name: string;
+  cite: string;                             // a few words: what it is based on
   note: string;                             // one line: what it is
   about: string;                            // what it is based on (shown folded)
   width: number;                            // natural width (km)
+  depth: number;                            // natural depth (km)
   fault?: KnownFault;
   noise?: Partial<Record<KindId, number>>;  // where noise sources of each kind belong (km), such as a coast
   at(x: number, d: number): Rock;           // the rock at x (km) and depth d (km below sea level, negative is up)
