@@ -19,7 +19,7 @@ const HELP = `
   <p class="lbl">1 Quake</p>
   <ol class="steps">
     <li><b>Model</b>: a real setting (subduction zone, Himalaya, rift, basin, volcano, ridge…) at its natural size. Type the <b>width × depth</b> on the picture's frame: any size runs in real time (the line under the picture gives the cell size, the highest frequency the grid carries and the time step).</li>
-    <li><b>Earthquake</b>: click the picture to place the hypocentre; it starts at once. Set <b>Mw</b>, <b>dip</b> and <b>slip</b> (thrust or normal); the fault plane and the beachball follow. Drag the star to move it, or the fault's deep end to turn it. <i>Rupture</i> (folded) sets its length, the way it runs and its speed. <b>Explosion</b>: choose a yield and click.</li>
+    <li><b>Earthquake</b>: click the picture to place the hypocentre, then press <b>Start</b> (or <kbd>R</kbd>). Set <b>Mw</b>, <b>dip</b> and <b>slip</b> (thrust or normal); the fault plane and the beachball follow. Drag the star to move it, or the fault's deep end to turn it. <i>Rupture</i> (folded) sets its length, the way it runs and its speed. <b>Explosion</b>: choose a yield, click to place it, Start.</li>
     <li><b>Seismometers</b> (A to E, drag them along the surface) record velocity, displacement or acceleration, vertical (Z) or along the slice (E), with P, S and R marks, first motions (P↑, P↓), distance, peak and intensity. <b>Download</b> saves SAC and CSV; <b>Copy link</b> shares the exact setup.</li>
     <li>Folded: <i>Filters and spectra</i>, <i>Display</i>, <i>Edit model</i> (add rock, dig; Undo, Redo, Reset), <i>Noise sources</i>, <i>Key</i>.</li>
   </ol>

@@ -433,7 +433,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     for (const s of sources) { const km = preset.noise?.[s.kind]; if (km !== undefined) s.x = Math.min(W - 3, Math.max(2, Math.round(placed(preset, km) / H))); }
     applyNoise();
     sim.still(); arr = null; setPlaying(false); refresh();
-    log(kind === "quake" ? "Start it, or click the picture to place the hypocentre" : "Click the picture to set off the explosion");
+    log(kind === "quake" ? "Start it, or click the picture to place the hypocentre" : "Click the picture to place the explosion, then press Start");
     if (sources.length) listen();
   }
 
@@ -641,10 +641,12 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     const n = sourceAt(p);
     if (n >= 0) { drag = { source: n }; over.setPointerCapture(e.pointerId); return; }
     if (tool === "source") {
-      // the star moves the source, the fault's deep end turns it; a click elsewhere puts the source there and starts it
-      if (kind === "quake" && onEnd(p)) { drag = { aim: true }; over.setPointerCapture(e.pointerId); return; }
-      if (onStar(p)) { drag = { hypo: true, moved: false }; over.setPointerCapture(e.pointerId); return; }
-      if (place(cell)) replay(); else log(kind === "quake" ? "Click in solid rock to place the hypocentre" : "Click under the ground to set off the explosion");
+      // the star moves the source, the fault's deep end turns it, a click elsewhere puts the source there; none of
+      // these starts it (Start does), and the old waves stop
+      if (kind === "quake" && onEnd(p)) { hush(); drag = { aim: true }; over.setPointerCapture(e.pointerId); return; }
+      if (onStar(p)) { hush(); drag = { hypo: true, moved: false }; over.setPointerCapture(e.pointerId); return; }
+      if (place(cell)) { hush(); log("Placed. Press Start (or R)"); }
+      else log(kind === "quake" ? "Click in solid rock to place the hypocentre" : "Click under the ground to place the explosion");
       return;
     }
     drag = { last: [cell.i, cell.j] };
@@ -684,7 +686,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     // drawing moved the surface under a noise source: put it back on the ground
     if (drag && "last" in drag && sources.some((n) => n.j !== top[n.x])) applyNoise();
     if (drag && "last" in drag) endStroke();
-    if (drag && ("aim" in drag || ("hypo" in drag && drag.moved))) replay();
+    if (drag && ("aim" in drag || ("hypo" in drag && drag.moved))) log("Moved. Press Start (or R)");
     drag = null;
   };
   over.addEventListener("pointerup", release);
@@ -793,7 +795,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   lenEl.addEventListener("change", () => edit(() => { const v = +lenEl.value; q.length = lenEl.value.trim() === "" || !(v > 0) ? null : v; }));
   vrEl.addEventListener("input", () => edit(() => { q.speed = +vrEl.value; }));
   on("qDir", "dir", (v) => edit(() => { q.dir = v as Quake["dir"]; }));
-  on("qKind", "kind", (v) => { kind = v as "quake" | "blast"; hush(); refresh(); log(kind === "quake" ? "Click the picture to place the hypocentre, or press Start" : "Click the picture to set off the explosion"); });
+  on("qKind", "kind", (v) => { kind = v as "quake" | "blast"; hush(); refresh(); log(kind === "quake" ? "Click the picture to place the hypocentre, then press Start" : "Click the picture to place the explosion, then press Start"); });
   $("qRupture").addEventListener("click", replay);
   const showBlast = () => showSource();
   $<HTMLSelectElement>("qBlast").addEventListener("change", (e) => { blast = BLASTS.find((b) => b.id === (e.target as HTMLSelectElement).value)!; showBlast(); });
