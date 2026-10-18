@@ -10,8 +10,14 @@ export const corner = (m: number) => 4.9e6 * 3.5 * (30 / (moment(m) * 1e7)) ** (
 export const size = (m: number, f: number) => (moment(m) / moment(5)) * (1 + (f / corner(5)) ** 2) / (1 + (f / corner(m)) ** 2);
 /** Magnitude of an explosion of kt kilotons of TNT (body-wave magnitude in hard rock). */
 export const blastMagnitude = (kt: number) => 4.45 + 0.75 * Math.log10(kt);
-/** Typical length of the fault that slips (km), Wells and Coppersmith (1994). */
-export const ruptureKm = (m: number) => 10 ** (-2.44 + 0.59 * m);
+/** How far a rupture of magnitude m reaches down its dip (km): what a slice through the fault shows. Down-dip
+ *  width from Wells and Coppersmith (1994) for normal and reverse faults, and from Strasser et al. (2010) for
+ *  shallow-dipping megathrusts (subduction interfaces, under 25°). */
+const WIDTH = { normal: [-1.14, 0.35], reverse: [-1.61, 0.41], megathrust: [-0.882, 0.351] } as const;
+const widthKind = (slip: "normal" | "reverse", dip: number) => slip === "normal" ? WIDTH.normal : dip < 25 ? WIDTH.megathrust : WIDTH.reverse;
+export const ruptureKm = (m: number, slip: "normal" | "reverse", dip: number) => { const [a, b] = widthKind(slip, dip); return 10 ** (a + b * m); };
+/** The magnitude whose rupture reaches km down the dip. */
+export const magnitudeFor = (km: number, slip: "normal" | "reverse", dip: number) => { const [a, b] = widthKind(slip, dip); return (Math.log10(km) - a) / b; };
 
 /** Modified Mercalli intensity from peak ground velocity in cm/s (Worden et al., 2012). */
 export function intensity(pgv: number) {

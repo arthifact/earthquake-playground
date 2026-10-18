@@ -5,8 +5,8 @@
 import type { KindId } from "./noise";
 import { PAPER_RGB, earth, hex, mix, type RGB } from "./plot";
 
-/** Slice sizes: the scale of the grid (1: 80 m cells, 61 km wide, waves at 1.1 Hz). */
-export const SCALES = [1, 2.5, 5, 10];
+/** The slice's scale: 1 is 80 m cells, 61 km wide, waves at 1.1 Hz; any width from MIN_KM to MAX_KM. */
+export const MIN_KM = 20, MAX_KM = 1000;
 export let SCALE = 1;
 export let H = 0.08;                         // km per cell
 export const W = 768, VH = 400, SKY = 40;    // cells on screen; rows of sky above sea level
@@ -35,146 +35,58 @@ export const ROCK = {
   granite: { name: "Granite", vp: 6.0, vs: 3.5, rho: 2.65, group: "Crystalline" },
   basalt: { name: "Basalt", vp: 6.2, vs: 3.4, rho: 2.9, group: "Crystalline" },
   hard: { name: "Hard rock (lower crust)", vp: 6.6, vs: 3.75, rho: 2.9, group: "Crystalline" },
-  mantle: { name: "Mantle (peridotite)", vp: 7.6, vs: 4.3, rho: 3.3, group: "Crystalline" },
+  mantle: { name: "Mantle (peridotite)", vp: 8.05, vs: 4.5, rho: 3.35, group: "Crystalline" },
   ice: { name: "Ice", vp: 3.8, vs: 1.9, rho: 0.92, tint: "#d6e8ee", group: "Other" },
   water: { name: "Water", vp: 1.5, vs: 0, rho: 1.0, group: "Liquid (no S waves)" },
   magma: { name: "Magma", vp: 2.8, vs: 0, rho: 2.6, group: "Liquid (no S waves)" },
 } satisfies Record<string, Rock>;
 export type RockId = keyof typeof ROCK;
-export const VMAX = 7.6;
+export const VMAX = 8.1;
 
+/** A fault a model is known for: its upper end at x km from the model's left edge and top km deep, its dip (degrees)
+ *  toward +x (toward 1) or -x (-1), its length (km), magnitude and slip. */
+export interface KnownFault { x: number; top: number; dip: number; toward: 1 | -1; length: number; magnitude: number; slip: "normal" | "reverse" }
+/** A model template: a real setting in kilometres, from x = 0 to its natural width; a slice of another width centres
+ *  it and carries its edges on (it is never stretched). */
 export interface Preset {
   name: string;
-  note: string;
-  quake: [number, number];                  // x, depth (km)
-  stations: number[];                      // x (km), three of them
-  fault?: { x: number; dip: number };       // where a fault meets the surface (km) and its dip (degrees)
+  note: string;                             // one line: what it is
+  about: string;                            // what it is based on (shown folded)
+  width: number;                            // natural width (km)
+  fault?: KnownFault;
   noise?: Partial<Record<KindId, number>>;  // where noise sources of each kind belong (km), such as a coast
-  at(x: number, d: number): Rock;           // the rock at x (km) and depth d (km, negative is up)
+  at(x: number, d: number): Rock;           // the rock at x (km) and depth d (km below sea level, negative is up)
 }
 
-const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-const layered = (d: number, soil: number, rock: number, hard: number, top: Rock = ROCK.soil) =>
-  d < soil ? top : d < rock ? ROCK.rock : d < hard ? ROCK.hard : ROCK.mantle;
+/** Rocks made by the templates (velocity gradients, named layers), so the readout can name them. */
+const NAMED = new Map<string, Rock>();
+const key = (vp: number, vs: number, rho: number) => `${Math.fround(vp)},${Math.fround(vs)},${Math.fround(rho)}`;
+export function rock(name: string, vp: number, vs: number, rho: number): Rock {
+  const k = key(vp, vs, rho);
+  let r = NAMED.get(k);
+  if (!r) { r = { name, vp, vs, rho }; NAMED.set(k, r); }
+  return r;
+}
 
-export const PRESETS: Record<string, Preset> = {
-  layers: {
-    name: "Layers",
-    note: "Sediment on top, then rock, hard rock and the mantle. Waves bend and bounce at every boundary.",
-    quake: [18, 12], stations: [30, 42, 54],
-    at: (x, d) => d < 0 ? ROCK.air : layered(d, 2 + 0.5 * Math.sin(x / 7), 10 + 1.5 * Math.sin(x / 11 + 1), 24 + Math.sin(x / 9), ROCK.sediment),
-  },
-  basin: {
-    name: "Soft-soil valley",
-    note: "Soft soil traps the waves: the ground shakes harder and longer in the valley. Try Shaking, then compare B with A.",
-    quake: [14, 11], stations: [22, 40, 54],
-    at: (x, d) => {
-      if (d < 0) return ROCK.air;
-      const basin = 3.4 * Math.sqrt(Math.max(0, 1 - ((x - 40) / 11) ** 2));
-      return d < basin ? ROCK.soil : layered(d, 0, 12, 25);
-    },
-  },
-  mountains: {
-    name: "Mountains",
-    note: "The surface follows the mountains. Surface waves climb over them; some energy bounces back.",
-    quake: [12, 9], stations: [24, 36, 46],
-    at: (x, d) => d < -(2.6 * Math.exp(-(((x - 24) / 5.5) ** 2)) + 1.8 * Math.exp(-(((x - 46) / 4) ** 2))) ? ROCK.air : layered(d, -9, 12, 25),
-  },
-  volcano: {
-    name: "Volcano",
-    note: "Liquid magma has no stiffness to shake sideways, so S waves cannot cross it. Look for the hole in the S wave behind the magma.",
-    quake: [10, 12], stations: [24, 38, 52],
-    at: (x, d) => {
-      const top = -2.8 * Math.max(0, 1 - Math.abs(x - 38) / 11) ** 1.3;
-      if (d < top) return ROCK.air;
-      if (((x - 38) / 7) ** 2 + ((d - 5) / 2.5) ** 2 < 1 || (Math.abs(x - 38) < 0.35 && d < 5)) return ROCK.magma;
-      return layered(d, -9, 13, 25);
-    },
-  },
-  fault: {
-    name: "Fault",
-    note: "Earthquakes happen when rock slips along a fault. Here the right side has already dropped, so its soft soil is thick: draw a fault along the break in the layers to make it slip again.",
-    quake: [36, 10], stations: [18, 42, 54], fault: { x: 30, dip: 60 },
-    at: (x, d) => {
-      if (d < 0) return ROCK.air;
-      const drop = x > 30 + d / Math.tan(Math.PI / 3) ? 2.5 : 0;
-      return layered(d, 0.8 + drop, 10 + drop, 24 + drop * 0.5);
-    },
-  },
-  ocean: {
-    name: "Ocean and coast",
-    note: "Water is a liquid, so S waves cannot travel in the sea. P waves can, which is how whales and ships sometimes feel quakes.",
-    quake: [16, 10], stations: [30, 42, 54], noise: { ocean: 27 },
-    at: (x, d) => {
-      const top = -0.5 * smooth(28, 36, x);
-      if (d < top) return ROCK.air;
-      if (d < 2.6 * (1 - smooth(14, 27, x))) return ROCK.water;
-      return layered(d, -9, 11, 24);
-    },
-  },
-  saltdome: {
-    name: "Salt dome",
-    note: "Salt is lighter than the rock around it, so it rises in a dome and bends the layers up. It is also fast: waves speed up inside it and bounce off its sides. Oil and gas often gather beside salt domes.",
-    quake: [12, 16], stations: [24, 34, 46],
-    at: (x, d) => {
-      if (d < 0) return ROCK.air;
-      const dx = Math.abs(x - 34);
-      const cap = d > 1.4 && d < 3.6 ? 5.2 * Math.sqrt(Math.max(0, 1 - ((d - 2.5) / 1.1) ** 2)) : 0;
-      const stem = d >= 2.5 && d < 12 ? 2.2 + 0.18 * (d - 2.5) : 0;
-      if (dx < Math.max(cap, stem) || (d > 11 && d < 13)) return ROCK.salt;
-      if (d < 0.6) return ROCK.sediment;
-      if (d < 11) return Math.floor((d + 3 * Math.exp(-((dx / 8) ** 2))) / 1.4) % 2 ? ROCK.shale : ROCK.sandstone;
-      return layered(d, 0, 20, 26);
-    },
-  },
-  watertable: {
-    name: "Water table",
-    note: "Below the water table, water fills the gaps between sand grains. Water resists squeezing, so P waves speed up there; it cannot resist shearing, so S waves hardly change. Watch the P wave bend at the water table while the S wave goes straight through.",
-    quake: [16, 7], stations: [30, 42, 54],
-    at: (x, d) => {
-      if (d < -0.7 * Math.exp(-(((x - 42) / 9) ** 2))) return ROCK.air;
-      const table = 1.0 + 0.35 * Math.sin(x / 8) - 0.4 * Math.exp(-(((x - 42) / 9) ** 2));
-      if (d < table) return ROCK.sand;
-      if (d < 4.5) return ROCK.wetsand;
-      return layered(d, 6.5, 14, 26, ROCK.sediment);
-    },
-  },
-  caves: {
-    name: "Caves",
-    note: "Water dissolves limestone and leaves caves. A cave is empty, so waves bounce off its walls and each cave sends out small new waves of its own.",
-    quake: [12, 9], stations: [26, 38, 50],
-    at: (x, d) => {
-      if (d < 0) return ROCK.air;
-      for (const [cx, cd, rx, rz] of [[23, 1.3, 1.5, 0.6], [30, 2.6, 1.0, 0.8], [36, 0.9, 2.2, 0.45], [43, 3.3, 1.7, 0.9], [50, 1.6, 1.2, 0.6]]) {
-        if (((x - cx) / rx) ** 2 + ((d - cd) / rz) ** 2 < 1) return ROCK.air;
-      }
-      return d < 6 ? ROCK.limestone : layered(d, 0, 16, 26);
-    },
-  },
-  plain: {
-    name: "Plain rock",
-    note: "Nothing in the way: the P and S rings spread out evenly, and the surface waves follow the ground.",
-    quake: [20, 10], stations: [30, 42, 54],
-    at: (_x, d) => d < 0 ? ROCK.air : ROCK.rock,
-  },
-};
-
-/** The ground for a preset on the whole grid (the absorbing layer copies the nearest column on screen). A bigger
- *  slice stretches the ready-made ground sideways and keeps its depths: a valley 3.4 km deep stays 3.4 km deep, and
- *  below the presets' 29 km the mantle goes on. */
+/** The ground for a template on the whole grid (the absorbing layer copies the nearest column on screen). The
+ *  template sits in the middle of the slice; past its edges, its edge columns carry on. */
 export function build(preset: Preset) {
   const vp = new Float32Array(NX * NZ), vs = new Float32Array(NX * NZ), rho = new Float32Array(NX * NZ);
+  const shift = (WIDTH_KM - preset.width) / 2;
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
-    const x = Math.min(W - 1, Math.max(0, i - SPONGE)) * 0.08, r = preset.at(x, (j - SKY + 0.5) * H), k = j * NX + i;
+    const x = Math.min(preset.width, Math.max(0, Math.min(W - 1, Math.max(0, i - SPONGE)) * H - shift));
+    const r = preset.at(x, (j - SKY + 0.5) * H), k = j * NX + i;
     vp[k] = r.vp; vs[k] = r.vs; rho[k] = r.rho;
   }
   return { vp, vs, rho };
 }
+/** Where a template's x (km) lands in the slice (km from its left edge). */
+export const placed = (preset: Preset, x: number) => x + (WIDTH_KM - preset.width) / 2;
 
 /** The rock at a cell, by its speeds (for the readout). */
 export function rockAt(vp: number, vs: number, rho: number): Rock {
   if (vp <= 0) return ROCK.air;
-  return Object.values(ROCK as Record<string, Rock>).find((r) => Math.abs(r.vp - vp) < 0.01 && Math.abs(r.vs - vs) < 0.01 && Math.abs(r.rho - rho) < 0.01) ?? { name: "Custom rock", vp, vs, rho };
+  return NAMED.get(key(vp, vs, rho)) ?? Object.values(ROCK as Record<string, Rock>).find((r) => Math.abs(r.vp - vp) < 0.01 && Math.abs(r.vs - vs) < 0.01 && Math.abs(r.rho - rho) < 0.01) ?? { name: "Custom rock", vp, vs, rho };
 }
 
 const TINTED = Object.values(ROCK as Record<string, Rock>).filter((r) => r.tint).map((r) => ({ vp: Math.fround(r.vp), rho: Math.fround(r.rho), tint: r.tint! }));
@@ -186,7 +98,7 @@ export function colour(vp: number, vs: number, rho: number): [number, number, nu
   const tinted = TINTED.find((r) => r.rho === rho && r.vp === vp);
   if (tinted) c = hex(tinted.tint);
   else if (vs <= 0) c = rho < 1.5 ? WATER : MAGMA;
-  else c = mix(earth((vp - 2) / 5.8), PAPER_RGB, 0.58);
+  else c = mix(earth((vp - 2) / 6.2), PAPER_RGB, 0.42);
   return [c[0], c[1], c[2], 255];
 }
 export function rockCss(r: Rock) {

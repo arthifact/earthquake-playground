@@ -6,10 +6,11 @@
 // the records download as SAC and CSV. Draw any rock type, or dig caves.
 
 import { save, sac, csv, zip, type Trace } from "../export";
-import { DEPTH_KM, H, NX, NZ, PRESETS, ROCK, SCALE, SCALES, SKY, SPONGE, VH, VMAX, W, WIDTH_KM, build, colour, rockAt, rockCss, setScale, type Preset, type Rock } from "../ground";
+import { DEPTH_KM, H, MAX_KM, MIN_KM, NX, NZ, ROCK, SCALE, SKY, SPONGE, VH, VMAX, W, WIDTH_KM, build, colour, placed, rockAt, rockCss, setScale, type Preset, type Rock } from "../ground";
+import { PRESETS } from "../templates";
 import { KINDS, LEVELS, source, type KindId } from "../noise";
 import { ACCENT, INK, LINE, MONO, MUTED, NAVY, OCHRE, PAPER, RUST, TEAL, label, ramp, star, surface } from "../plot";
-import { BLASTS, FELT, ROMAN, blastMagnitude, corner, intensity, ruptureKm, size, units } from "../shaking";
+import { BLASTS, FELT, ROMAN, blastMagnitude, corner, intensity, magnitudeFor, ruptureKm, size, units } from "../shaking";
 import { amplitude, bandpass, spectrogram } from "../spectrum";
 import { Sim } from "../sim";
 import { applyGround, decode, diffGround, encode, fromAddress, linkFor, type Scenario } from "../scenario";
@@ -101,56 +102,58 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     <canvas class="seis" id="qSeis"></canvas>`;
   side.innerHTML = `
     <div class="pane">
-      <h2>Start an earthquake</h2>
-      <p>Earthquakes happen on faults. Drag across the ground to draw a fault, then press <b style="color:var(--text)">Start the quake</b>. Click on the fault, or drag its star, to choose where the rupture starts. Drag a seismometer <b style="color:var(--text)">▲</b> along the surface to move it.</p>
-      <div class="field"><span class="lbl">A click</span><div class="segmented" id="qTool"><button type="button" data-tool="fault">Fault</button><button type="button" data-tool="blast">Explosion</button><button type="button" data-tool="draw">Rock</button><button type="button" data-tool="dig">Dig</button></div></div>
+      <h2>Model</h2>
+      <div class="field"><span class="lbl">Template</span><select id="qPreset">${Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join("")}</select></div>
+      <p id="qNote"></p>
+      <div class="nums">
+        <label class="num"><span class="lbl">Width</span><span class="in"><input type="number" id="qWidth" min="20" max="1000" step="1"><em>km</em></span></label>
+        <div class="num"><span class="lbl">Grid</span><p class="hint" id="qSizeNote"></p></div>
+      </div>
+      <details class="more"><summary>About this model</summary><p id="qAbout"></p></details>
+    </div>
+    <div class="pane">
+      <div class="field"><span class="lbl">Click on the picture to</span><div class="segmented" id="qTool"><button type="button" data-tool="fault">Draw a fault</button><button type="button" data-tool="blast">Explode</button><button type="button" data-tool="draw">Add rock</button><button type="button" data-tool="dig">Dig</button></div></div>
       <div class="stack" id="qDrawRow" hidden>
         <div class="field"><span class="lbl">Rock</span><select id="qRock">${GROUPS.map((g) => `<optgroup label="${g}">${ROCKS.filter(([, r]) => r.group === g).map(([id, r]) => `<option value="${id}">${r.name}</option>`).join("")}</optgroup>`).join("")}<optgroup label="Your own"><option value="custom">Custom rock…</option></optgroup></select></div>
         <div class="stack" id="qCustom" hidden>
           <label class="slider"><span class="lbl">P speed</span><output id="qCvpOut"></output><input type="range" id="qCvp" min="1.5" max="${VMAX}" step="0.1" value="4.5"></label>
-          <label class="slider"><span class="lbl">S speed</span><output id="qCvsOut"></output><input type="range" id="qCvs" min="0" max="4.3" step="0.05" value="2.5"></label>
+          <label class="slider"><span class="lbl">S speed</span><output id="qCvsOut"></output><input type="range" id="qCvs" min="0" max="4.5" step="0.05" value="2.5"></label>
           <label class="slider"><span class="lbl">Density</span><output id="qCrhoOut"></output><input type="range" id="qCrho" min="0.9" max="3.5" step="0.05" value="2.5"></label>
         </div>
-        <p class="mono" id="qRockInfo"></p>
+        <p class="hint" id="qRockInfo"></p>
       </div>
       <label class="slider" id="qBrushRow" hidden><span class="lbl">Brush</span><output id="qBrushOut"></output><input type="range" id="qBrush" min="0.5" max="6" step="0.5" value="1"></label>
-      <div class="row3"><button type="button" class="btn" id="qUndo" title="Undo (⌘Z)" disabled>Undo</button><button type="button" class="btn" id="qRedo" title="Redo (⇧⌘Z)" disabled>Redo</button><button type="button" class="btn" id="qReset" title="Put the ground back as it was">Reset</button></div>
+      <div class="row3"><button type="button" class="btn" id="qUndo" title="Undo (⌘Z)" disabled>Undo</button><button type="button" class="btn" id="qRedo" title="Redo (⇧⌘Z)" disabled>Redo</button><button type="button" class="btn" id="qReset" title="Put the model back as it was">Reset</button></div>
     </div>
     <div class="pane" id="qFaultPane">
-      <span class="lbl">The fault</span>
-      <p class="mono" id="qFaultInfo"></p>
+      <span class="lbl">Fault</span>
+      <p class="hint" id="qFaultInfo"></p>
+      <button type="button" class="btn" id="qAddFault" hidden>Add the model's fault</button>
       <div class="stack" id="qFaultControls">
         <button type="button" class="btn wide go" id="qRupture">Start the quake</button>
-        <label class="slider"><span class="lbl">Magnitude</span><output id="qMagOut"></output><input type="range" id="qMag" min="4" max="8.5" step="0.1" value="6"></label>
+        <label class="slider"><span class="lbl">Magnitude</span><output id="qMagOut"></output><input type="range" id="qMag" min="4" max="9.5" step="0.1" value="6"></label>
+        <div class="nums">
+          <label class="num"><span class="lbl">Length</span><span class="in"><input type="number" id="qLen" min="0.5" step="1"><em>km</em></span></label>
+          <label class="num"><span class="lbl">Dip</span><span class="in"><input type="number" id="qDip" min="1" max="89" step="1"><em>°</em></span></label>
+          <label class="num"><span class="lbl">Top depth</span><span class="in"><input type="number" id="qTop" step="0.5"><em>km</em></span></label>
+          <label class="num"><span class="lbl">Top at</span><span class="in"><input type="number" id="qPos" step="1"><em>km</em></span></label>
+        </div>
+        <div class="row"><div class="segmented" id="qToward"><button type="button" data-toward="-1" title="Dips toward the left">Dips ←</button><button type="button" data-toward="1" title="Dips toward the right">Dips →</button></div><button type="button" class="btn small" id="qFit" title="Make the fault as long as this magnitude ruptures">Fit to M</button></div>
+        <div class="field"><span class="lbl">Slip</span><div class="segmented" id="qSlip"><button type="button" data-slip="normal">Normal</button><button type="button" data-slip="reverse">Reverse (thrust)</button></div></div>
         <label class="slider"><span class="lbl">Rupture starts</span><output id="qStartOut"></output><input type="range" id="qStart" min="0" max="1" step="0.01" value="0.5"></label>
         <label class="slider"><span class="lbl">Rupture speed</span><output id="qVrOut"></output><input type="range" id="qVr" min="0.5" max="0.95" step="0.05" value="0.8"></label>
-        <div class="field"><span class="lbl">Slip</span><div class="segmented" id="qSlip"><button type="button" data-slip="normal">Normal</button><button type="button" data-slip="reverse">Reverse (thrust)</button></div></div>
+        <p class="hint" id="qSrcNote"></p>
         <button type="button" class="btn" id="qDelete">Delete fault</button>
-        <p id="qSrcNote"></p>
-        <p class="mono" style="font-size:10px">A slice shows faults that slip up or down their dip (normal and reverse). Strike-slip faults, like the San Andreas, slip across the slice, so a slice cannot show them.</p>
+        <details class="more"><summary>About faults</summary>
+          <p>Normal: the rock above the fault slides down, as where the crust is pulled apart. Reverse (thrust): it is pushed up, as where plates collide. The rupture runs from its start both ways, as far down the dip as the magnitude reaches (Wells and Coppersmith, 1994; Strasser et al., 2010, for megathrusts), and each step of 1 in magnitude releases about 32 times more energy.</p>
+          <p>A slice shows faults that slip up or down their dip. Strike-slip faults, like the San Andreas, slip across the slice, so a slice cannot show them.</p>
+        </details>
       </div>
     </div>
     <div class="pane" id="qBlastPane" hidden>
       <div class="field"><span class="lbl">Explosion</span><select id="qBlast">${BLASTS.map((b) => `<option value="${b.id}">${b.name}</option>`).join("")}</select></div>
-      <p id="qBlastNote"></p>
-    </div>
-    <div class="pane">
-      <div class="field"><span class="lbl">Size of the slice</span><div class="segmented" id="qSize">${SCALES.map((k) => `<button type="button" data-size="${k}">${Math.round(W * 0.08 * k)} km</button>`).join("")}</div></div>
-      <p class="mono" id="qSizeNote" style="font-size:10px"></p>
-      <div class="field"><span class="lbl">Ground</span><select id="qPreset">${Object.entries(PRESETS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join("")}</select></div>
-      <p id="qNote"></p>
-    </div>
-    <div class="pane">
-      <span class="lbl">Share this experiment</span>
-      <p>A link to this exact setup: the ground you drew, the fault or explosion, the seismometers and the noise. Send it to students, or keep it for the next class.</p>
-      <div class="toggles"><label><input type="checkbox" id="qShareStart" checked>Start the quake when the link opens</label></div>
-      <button type="button" class="btn wide" id="qShare">Copy a link</button>
-      <input type="text" class="mono" id="qShareLink" readonly hidden aria-label="Link to this experiment" style="width:100%;font-size:10px;margin-top:6px">
-    </div>
-    <div class="pane">
-      <div class="field"><span class="lbl">Add a noise source</span><div class="segmented" id="qAdd">${Object.entries(KINDS).map(([id, k]) => `<button type="button" data-add="${id}">${k.name.split(" ")[0]}</button>`).join("")}</div></div>
-      <div class="stlist" id="qSources"></div>
-      <p id="qSrcHelp">Things on the surface that shake the ground all the time. Their waves are simulated with the quake's, so the seismometers nearest them are noisiest. Drag one along the surface to move it.</p>
+      <p class="hint" id="qBlastNote"></p>
+      <details class="more"><summary>About explosions</summary><p>An explosion pushes out equally in all directions, so it makes mostly P waves and little S, and the first motion is up everywhere: that is how seismologists tell nuclear tests from earthquakes. Body-wave magnitude 4.45 + 0.75 log₁₀(yield in kt).</p></details>
     </div>
     <div class="pane">
       <div class="field"><span class="lbl">Seismometers</span><div class="segmented" id="qCount">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-count="${n}">${n}</button>`).join("")}</div></div>
@@ -166,10 +169,12 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
         </div>
         <div class="toggles"><label><input type="checkbox" id="qZero">Zero phase</label></div>
         <div class="field"><span class="lbl">Scale</span><div class="segmented" id="qScale"><button type="button" data-scale="fit">Each to fit</button><button type="button" data-scale="true">True size</button></div></div>
-        <p class="mono" style="font-size:10px">4-pole Butterworth, causal like a real instrument unless zero phase. Spectra: whole record in ink, before the P wave in grey; above <span id="qFgrid">${hz(F_GRID)}</span> Hz the grid is too coarse. Downloads are not filtered.</p>
+        <p class="hint">4-pole Butterworth, causal unless zero phase. Above <span id="qFgrid">${hz(F_GRID)}</span> Hz the grid is too coarse. Downloads are not filtered.</p>
       </div></details>
-      <button type="button" class="btn wide" id="qDownload">Download seismograms</button>
-      <p class="mono" style="font-size:10px">SAC (velocity, nm/s, ObsPy-ready) and CSV (m/s), 100 samples per second, noise included.</p>
+      <div class="row"><button type="button" class="btn" id="qDownload">Download</button><button type="button" class="btn" id="qShare">Copy link</button></div>
+      <p class="hint">SAC (nm/s) and CSV (m/s), noise included. The link reopens this exact setup.</p>
+      <div class="toggles"><label><input type="checkbox" id="qShareStart" checked>Link starts the quake</label></div>
+      <input type="text" class="mono" id="qShareLink" readonly hidden aria-label="Link to this setup" style="width:100%;font-size:10px">
     </div>
     <div class="pane">
       <div class="field"><span class="lbl">Show</span><div class="segmented" id="qMode"><button type="button" data-mode="0">Waves</button><button type="button" data-mode="1">Shaking</button><button type="button" data-mode="2">Particles</button></div></div>
@@ -179,15 +184,20 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
       <div class="toggles"><label><input type="checkbox" id="qLabels" checked>Labels</label></div>
     </div>
     <div class="pane">
-      <span class="lbl">What you see</span>
-      <ul class="key">
-        <li><i class="swatch sw-p"></i><div><b>P wave · primary</b><span>Squeezes (rust) and stretches (ochre) the rock. The fastest wave, so it arrives first. It travels through rock, water and magma.</span></div></li>
-        <li><i class="swatch sw-s"></i><div><b>S wave · secondary</b><span>Shakes the rock sideways. Slower, about 0.6 × the P speed, and only solid rock can carry it.</span></div></li>
-        <li><i class="swatch sw-r"></i><div><b>Rayleigh wave · surface</b><span>Rolls along the ground behind the S wave (marked R on the seismograms). The slowest, and often the strongest shaking.</span></div></li>
-        <li><i class="swatch sw-l"></i><div><b>Love wave · surface</b><span>Shakes the ground sideways, across this slice, so a slice cannot show it. See Wave types.</span></div></li>
+      <div class="field"><span class="lbl">Noise sources</span><div class="segmented" id="qAdd">${Object.entries(KINDS).map(([id, k]) => `<button type="button" data-add="${id}">${k.name.split(" ")[0]}</button>`).join("")}</div></div>
+      <div class="stlist" id="qSources"></div>
+      <p class="hint" id="qSrcHelp">Simulated with the quake; drag one along the surface.</p>
+    </div>
+    <div class="pane">
+      <details class="more"><summary>What you see</summary>
+      <ul class="key" style="margin-top:10px">
+        <li><i class="swatch sw-p"></i><div><b>P wave</b><span>Squeezes (rust) and stretches (ochre). Fastest; crosses rock, water and magma.</span></div></li>
+        <li><i class="swatch sw-s"></i><div><b>S wave</b><span>Shakes sideways, about 0.6 × the P speed; solids only.</span></div></li>
+        <li><i class="swatch sw-r"></i><div><b>Rayleigh wave</b><span>Rolls along the surface (R); slowest, often strongest.</span></div></li>
+        <li><i class="swatch sw-l"></i><div><b>Love wave</b><span>Shakes across the slice, so a slice cannot show it.</span></div></li>
       </ul>
-      <p>The gap between P and S at a seismometer tells how far away the quake is: about ${KM_PER_S} km for every second.</p>
-      <p>On the up-and-down record, <b style="color:var(--text)">P↑</b> means the ground first moved up (pushed), <b style="color:var(--text)">P↓</b> down (pulled). An explosion pushes everywhere; a fault pushes on some sides and pulls on others, which is how seismologists tell how a fault slipped.</p>
+      <p>S − P tells the distance: about ${KM_PER_S} km per second. P↑ / P↓: the ground first moved up (pushed) or down (pulled).</p>
+      </details>
     </div>`;
 
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -196,7 +206,9 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   $("qRamp").style.background = `linear-gradient(90deg, ${["soil", "sediment", "rock", "hard", "mantle"].map((r) => rockCss(ROCK[r as keyof typeof ROCK])).join(", ")})`;
 
   let sim: Sim | null = null;
-  let presetId = "layers", preset: Preset = PRESETS[presetId], ground = build(preset);
+  let presetId = "subduction", preset: Preset = PRESETS[presetId];
+  setScale(preset.width / (W * 0.08)); scaled();
+  let ground = build(preset);
   let sources: { kind: KindId; x: number; level: number; j: number }[] = [];
   let tool: Tool = "fault", mode = 0, kind: "quake" | "blast" = "quake", speed = 7, glow = 1, brush = 1, labels = true, playing = true;
   let rockId = "granite";
@@ -329,7 +341,8 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   /** A new fault drawn from a to b: its magnitude ruptures about its whole length; it starts near its deep end. */
   function newFault(a: [number, number], b: [number, number]): Fault {
     const km = Math.hypot(b[0] - a[0], b[1] - a[1]) * H;
-    const magnitude = Math.round(Math.min(8.5, Math.max(4, (Math.log10(km) + 2.44) / 0.59)) * 10) / 10;
+    const dip = (Math.atan2(Math.abs(b[1] - a[1]), Math.abs(b[0] - a[0]) || 1e-9) * 180) / Math.PI;
+    const magnitude = Math.round(Math.min(9.5, Math.max(4, magnitudeFor(km, "normal", dip))) * 10) / 10;
     return { a, b, magnitude, start: b[1] > a[1] ? 0.85 : 0.15, speed: 0.8, slip: "normal" };
   }
   /** Rupture the fault: it starts at its start point and runs both ways at its speed (times the local S speed), as
@@ -338,7 +351,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     if (!sim) return;
     const { len, tx, tz, down, up, dip } = frame(f), at = f.start * len;
     // as far as its magnitude reaches, half each way; near an end it runs the other way instead (one-sided)
-    const want = Math.min(len, ruptureKm(f.magnitude) / H);
+    const want = Math.min(len, ruptureKm(f.magnitude, f.slip, dip) / H);
     const s0 = Math.min(Math.max(0, at - want / 2), len - want), s1 = s0 + want;
     // when the rupture front reaches each point along the fault (s, in whole cells from end a)
     const times = new Float32Array(Math.ceil(len) + 1).fill(NaN);
@@ -431,7 +444,8 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     chosen = null; rupture = null; kind = "quake"; hasSource = false;
     ground = build(preset);
     $<HTMLSelectElement>("qPreset").value = id;
-    $("qNote").textContent = preset.note;
+    $("qNote").textContent = preset.note; $("qAbout").textContent = preset.about;
+    if (preset.fault) addKnownFault();
     if (!sim) return;
     sim.setGround(ground.vp, ground.vs, ground.rho, colour);
     findSurface();
@@ -440,7 +454,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     for (const q of sources) { const km = preset.noise?.[q.kind]; if (km !== undefined) q.x = Math.min(W - 3, Math.max(2, Math.round(km / H))); }
     applyNoise();
     sim.still(); arr = null; setPlaying(false); showFault();
-    log("Drag across the ground to draw a fault: it ruptures. Or choose Explosion.");
+    log(preset.fault ? "Press Start the quake, or draw your own fault" : "Draw a fault on the picture, or choose Explode");
     if (sources.length) listen();
   }
 
@@ -451,12 +465,12 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     $("qSources").innerHTML = sources.map((q, s) => `<div class="srcrow"><i style="background:${SOURCE_COLOUR[q.kind]}"></i><b>${KINDS[q.kind].name}</b><span class="mono">${(q.x * H).toFixed(1)} km</span>
       <button type="button" class="close" data-remove="${s}" aria-label="Remove ${KINDS[q.kind].name}">×</button>
       <select data-level="${s}" aria-label="Level of ${KINDS[q.kind].name}">${LEVELS.map(([v, name]) => `<option value="${v}"${v === q.level ? " selected" : ""}>${name}</option>`).join("")}</select></div>`).join("");
-    $("qAdd").querySelectorAll("button").forEach((b) => { b.disabled = sources.length >= MAX_SOURCES || SCALE !== 1; });
+    $("qAdd").querySelectorAll("button").forEach((b) => { b.disabled = sources.length >= MAX_SOURCES || SCALE > 2; });
     if (!sim) return;
     sim.setNoise(sources.map((q) => source(q.kind, q.x + SPONGE, q.j, q.level, sim!.dt)), Math.ceil(WARM_S / sim.dt));
   }
   function addSource(kind: KindId) {
-    if (sources.length >= MAX_SOURCES || SCALE !== 1) return;
+    if (sources.length >= MAX_SOURCES || SCALE > 2) return;
     const km = preset.noise?.[kind] ?? SOURCE_AT[kind];
     sources.push({ kind, x: Math.min(W - 3, Math.max(2, Math.round(km / H))), level: LEVELS[1][0], j: 0 });
     log(`${KINDS[kind].name}: ${KINDS[kind].note}`);
@@ -563,8 +577,9 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   /** Open a shared setup: its ground, faults, explosion, seismometers and noise; start the quake if it says so. */
   function open(sc: Scenario) {
     if (!sim || !PRESETS[sc.preset]) { log("That link's setup could not be read"); return; }
-    setSize(sc.scale ?? 1);
-    loadPreset(sc.preset);
+    presetId = sc.preset;
+    setSize(sc.scale ?? 1, false);
+    faults.length = 0; chosen = null;
     applyGround(ground, sc.rocks, sc.runs);
     sim.setGround(ground.vp, ground.vs, ground.rho, colour);
     findSurface();
@@ -752,20 +767,60 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
 
   // the fault's properties: changing one only changes the fault; Start the quake sets it off
   const magEl = $<HTMLInputElement>("qMag"), startEl = $<HTMLInputElement>("qStart"), vrEl = $<HTMLInputElement>("qVr");
+  // ---------------------------------------------------------------- fault geometry, in numbers
+  interface Geometry { x: number; top: number; dip: number; toward: 1 | -1; length: number }
+  /** A fault's upper end (km along the slice, km deep), dip, which way it dips and its length. */
+  function geometry(f: Fault): Geometry {
+    const [up, lo] = f.a[1] <= f.b[1] ? [f.a, f.b] : [f.b, f.a];
+    const dx = (lo[0] - up[0]) * H, dz = (lo[1] - up[1]) * H;
+    return { x: (up[0] - SPONGE) * H, top: (up[1] - SKY) * H, dip: Math.round((Math.atan2(dz, Math.abs(dx)) * 180) / Math.PI), toward: dx < 0 ? -1 : 1, length: Math.hypot(dx, dz) };
+  }
+  /** Put a fault where its numbers say (upper end first), kept inside the slice: too long a fault is shortened,
+   *  keeping its dip. */
+  function setGeometry(f: Fault, g: Geometry) {
+    const upperWasA = f.a[1] <= f.b[1], r = (Math.min(89, Math.max(1, g.dip)) * Math.PI) / 180;
+    const i = (x: number) => Math.min(NX - 4, Math.max(3, Math.round(x / H + SPONGE))), j = (d: number) => Math.min(NZ - 4, Math.max(3, Math.round(d / H + SKY)));
+    const xmin = (3 - SPONGE) * H, xmax = (NX - 4 - SPONGE) * H, dmax = (NZ - 4 - SKY) * H;
+    g.x = Math.min(xmax, Math.max(xmin, g.x));
+    const room = Math.min((g.toward > 0 ? xmax - g.x : g.x - xmin) / Math.cos(r), (dmax - g.top) / Math.sin(r));
+    const len = Math.max(H, Math.min(g.length, room));
+    f.a = [i(g.x), j(g.top)];
+    f.b = [i(g.x + g.toward * len * Math.cos(r)), j(g.top + len * Math.sin(r))];
+    if (!upperWasA) f.start = 1 - f.start;
+  }
+  /** The template's own fault, in place and ready (not started). */
+  function addKnownFault() {
+    const k = preset.fault;
+    if (!k) return;
+    const f: Fault = { a: [0, 0], b: [1, 1], magnitude: k.magnitude, start: 0.85, speed: 0.8, slip: k.slip };
+    setGeometry(f, { x: placed(preset, k.x), top: k.top, dip: k.dip, toward: k.toward, length: k.length });
+    faults.push(f); chosen = f;
+  }
+  const lenEl = $<HTMLInputElement>("qLen"), dipEl = $<HTMLInputElement>("qDip"), topEl = $<HTMLInputElement>("qTop"), posEl = $<HTMLInputElement>("qPos");
+  const reshape = (change: (g: Geometry) => void) => edit((f) => { const g = geometry(f); change(g); setGeometry(f, g); }, false);
+  lenEl.addEventListener("change", () => reshape((g) => { if (+lenEl.value > 0) g.length = +lenEl.value; }));
+  dipEl.addEventListener("change", () => reshape((g) => { if (+dipEl.value > 0) g.dip = +dipEl.value; }));
+  topEl.addEventListener("change", () => reshape((g) => { g.top = +topEl.value; }));
+  posEl.addEventListener("change", () => reshape((g) => { g.x = +posEl.value; }));
+  on("qToward", "toward", (v) => reshape((g) => { g.toward = v === "-1" ? -1 : 1; }));
+  $("qFit").addEventListener("click", () => reshape((g) => { g.length = ruptureKm(chosen!.magnitude, chosen!.slip, g.dip); }));
+  $("qAddFault").addEventListener("click", () => { addKnownFault(); showFault(); });
+
   function showFault() {
     $("qFaultControls").hidden = !chosen;
-    if (!chosen) { $("qFaultInfo").textContent = "No fault yet: drag across the ground to draw one."; return; }
-    const f = chosen, { len, dip } = frame(f), km = ruptureKm(f.magnitude), deep = (j: number) => ((j - SKY) * H).toFixed(1);
-    $("qFaultInfo").textContent = `${(len * H).toFixed(1)} km long · dips ${dip}° · from ${deep(Math.min(f.a[1], f.b[1]))} to ${deep(Math.max(f.a[1], f.b[1]))} km deep`;
+    $("qAddFault").hidden = !!chosen || !preset.fault;
+    if (!chosen) { $("qFaultInfo").textContent = "None: drag across the picture to draw one."; return; }
+    const f = chosen, { len, dip } = frame(f), km = ruptureKm(f.magnitude, f.slip, dip), g = geometry(f);
+    $("qFaultInfo").textContent = `${(len * H).toFixed(1)} km · dips ${dip}° · ${g.top.toFixed(1)} to ${(g.top + len * H * Math.sin((dip * Math.PI) / 180)).toFixed(1)} km deep`;
+    lenEl.value = g.length.toFixed(1); dipEl.value = String(g.dip); topEl.value = g.top.toFixed(1); posEl.value = g.x.toFixed(1);
+    segmented($("qToward"), "toward", String(g.toward));
     magEl.value = String(f.magnitude); startEl.value = String(f.start); vrEl.value = String(f.speed);
     $("qMagOut").textContent = `M ${f.magnitude.toFixed(1)}`;
     $("qStartOut").textContent = `${Math.round(f.start * 100)}% along`;
     $("qVrOut").textContent = `${f.speed.toFixed(2)} × S speed`;
     segmented($("qSlip"), "slip", f.slip);
-    const slips = Math.min(km, len * H);
-    $("qSrcNote").textContent = `About ${slips < 1 ? `${Math.round(slips * 1000)} m` : `${slips.toFixed(slips < 10 ? 1 : 0)} km`} of the fault slips` +
-      (km > len * H * 1.05 ? ` (a magnitude ${f.magnitude.toFixed(1)} needs about ${km.toFixed(0)} km: draw a longer fault)` : "") +
-      `. ${f.slip === "normal" ? "Normal: the rock above the fault slides down, as where the crust is pulled apart." : "Reverse (thrust): the rock above the fault is pushed up, as where plates collide."} Each step of 1 in magnitude releases about 32 times more energy.`;
+    const slips = Math.min(km, len * H), size = (v: number) => v < 1 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 10 ? 1 : 0)} km`;
+    $("qSrcNote").textContent = `${size(slips)} slips` + (km > len * H * 1.05 ? ` · M ${f.magnitude.toFixed(1)} needs about ${size(km)}: Fit to M, or a smaller magnitude` : "");
   }
   const edit = (change: (f: Fault) => void, again: boolean) => { if (!chosen) return; change(chosen); showFault(); if (again) slip(chosen); };
   magEl.addEventListener("input", () => edit((f) => { f.magnitude = +magEl.value; }, false));
@@ -780,9 +835,10 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     chosen = faults.at(-1) ?? null; showFault();
     log("Fault deleted");
   });
-  const showBlast = () => { $("qBlastNote").textContent = `About magnitude ${blastMagnitude(blast.kt).toFixed(1)}. An explosion pushes out equally in all directions, so it makes mostly P waves and little S: that is how seismologists tell nuclear tests from earthquakes.`; };
+  const showBlast = () => { $("qBlastNote").textContent = `About magnitude ${blastMagnitude(blast.kt).toFixed(1)}`; };
   $<HTMLSelectElement>("qBlast").addEventListener("change", (e) => { blast = BLASTS.find((b) => b.id === (e.target as HTMLSelectElement).value)!; showBlast(); });
-  $<HTMLSelectElement>("qPreset").addEventListener("change", (e) => loadPreset((e.target as HTMLSelectElement).value));
+  // a template opens at its natural width
+  $<HTMLSelectElement>("qPreset").addEventListener("change", (e) => { presetId = (e.target as HTMLSelectElement).value; setSize(PRESETS[presetId].width / (W * 0.08), false); });
   on("qCount", "count", (v) => { placeStations(+v); replay(); });
   $("qAdd").addEventListener("click", (e) => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-add]");
@@ -834,24 +890,36 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   $("qUndo").addEventListener("click", undo);
   $("qRedo").addEventListener("click", redo);
   /** Change the slice's size: the same grid, cells and waves scaled (see ground.ts and Sim.setScale). */
-  function setSize(k: number) {
-    if (k === SCALE || !SCALES.includes(k)) return;
+  /** Change the slice's width. The faults stay where they are in the model (a new template brings its own). */
+  function setSize(k: number, keep = true) {
+    k = Math.min(MAX_KM, Math.max(MIN_KM, k * W * 0.08)) / (W * 0.08);
+    const was = keep ? faults.map((f) => ({ f, g: geometry(f), shift: (WIDTH_KM - preset.width) / 2, mine: f === chosen })) : [];
+    const restore = () => {
+      if (!was.length) return;
+      faults.length = 0; chosen = null;
+      for (const { f, g, shift, mine } of was) { g.x += (WIDTH_KM - preset.width) / 2 - shift; setGeometry(f, g); faults.push(f); if (mine) chosen = f; }
+      chosen ??= faults.at(-1) ?? null; showFault();
+    };
+    if (Math.abs(k - SCALE) < 1e-6) { loadPreset(presetId); restore(); return; }
     setScale(k); scaled();
     sim?.setScale(H, F0);
     noiseUnit.forEach((u, s) => { u[0] = noiseTrace(101 + 7 * s, MAX_S * SPS + 1); u[1] = noiseTrace(907 + 13 * s, MAX_S * SPS + 1); });
     halfDone.forEach((d) => d.fill(0));
-    if (SCALE !== 1) sources = [];
+    if (SCALE > 2) sources = [];
     showSize(); showSpeed();
     $<HTMLSelectElement>("qFilter").querySelectorAll("option").forEach((o, q) => { o.textContent = filterName(FILTERS[q]); });
     showFilter(); $("qFgrid").textContent = hz(F_GRID);
     loadPreset(presetId);
+    restore();
   }
   function showSize() {
-    segmented($("qSize"), "size", String(SCALE));
-    $("qSizeNote").textContent = `${WIDTH_KM.toFixed(0)} km across, ${DEPTH_KM.toFixed(0)} km deep: ${(H * 1000).toFixed(0)} m cells, waves near ${hz(F0)} Hz` +
-      (SCALE === 1 ? "." : `. A bigger slice has longer waves, so it shows less detail, and its peaks and intensities count only these slow waves: near a big quake the real shaking (strongest at 1 to 10 Hz) is harder. Noise sources need the ${Math.round(W * 0.08)} km slice.`);
+    $<HTMLInputElement>("qWidth").value = WIDTH_KM.toFixed(0);
+    $("qSizeNote").textContent = `${DEPTH_KM.toFixed(0)} km deep · ${H < 0.1 ? `${(H * 1000).toFixed(0)} m` : `${H.toFixed(2)} km`} cells · ${hz(F0)} Hz`;
+    $("qSizeNote").title = "The grid keeps 768 × 400 cells, so any width runs as fast; wider slices have bigger cells and longer, slower waves." +
+      (SCALE > 1.5 ? " Peaks and intensities then count only these slow waves, so near a big quake they underrate the shaking." : "");
   }
-  on("qSize", "size", (v) => setSize(+v));
+  const widthEl = $<HTMLInputElement>("qWidth");
+  widthEl.addEventListener("change", () => { const km = +widthEl.value; if (km > 0) setSize(km / (W * 0.08)); else showSize(); });
   $("qReset").addEventListener("click", () => { loadPreset(presetId); log(`${preset.name}: the ground is back as it was`); });
   $<HTMLInputElement>("qLabels").addEventListener("change", (e) => { labels = (e.target as HTMLInputElement).checked; });
 
@@ -859,7 +927,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
   segmented($("qMeasure"), "measure", measure); segmented($("qComp"), "comp", comp); segmented($("qScale"), "scale", "fit"); segmented($("qLook"), "look", look); showFilter(); showSize();
   $<HTMLSelectElement>("qRock").value = rockId; $<HTMLSelectElement>("qBlast").value = blast.id;
   showBrush(); showSpeed(); showGlow(); showCustom(); showFault(); showBlast();
-  $("qNote").textContent = preset.note;
+  $("qNote").textContent = preset.note; $("qAbout").textContent = preset.about; $<HTMLSelectElement>("qPreset").value = presetId;
 
   Sim.create(gpuCanvas, {
     nx: NX, nz: NZ, h: H, vmax: VMAX, f0: F0, sponge: { left: SPONGE, right: SPONGE, bottom: SPONGE, top: 0 },
@@ -881,19 +949,21 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     const tick = (x0: number, y0: number, x1: number, y1: number) => { c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); };
     c.strokeStyle = INK; c.lineWidth = 1; c.strokeRect(L - 0.5, T - 0.5, iw + 1, ih + 1);
     c.font = MONO(10); c.fillStyle = MUTED; c.strokeStyle = MUTED; c.textBaseline = "bottom";
-    for (let km = 0; km <= WIDTH_KM; km += 10 * SCALE) {
+    const nice = (span: number, n: number) => [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500].find((d) => span / d <= n) ?? 1000;
+    const xstep = nice(WIDTH_KM, iw > 520 ? 7 : 4), dstep = nice(DEPTH_KM, 6);
+    for (let km = 0; km <= WIDTH_KM; km += xstep) {
       const x = X(km / H);
       tick(x, T - 4, x, T);
       c.textAlign = km === 0 ? "left" : "center";
       c.fillText(km === 0 ? (iw > 520 ? "0 km across" : "0 km") : String(km), x, T - 6);
     }
     c.textAlign = "right"; c.textBaseline = "middle";
-    for (let d = 0; d <= DEPTH_KM; d += 5 * SCALE) {
+    for (let d = 0; d <= DEPTH_KM; d += dstep) {
       const y = Y(SKY + d / H);
       tick(L - 4, y, L, y);
       c.fillText(d === 0 ? "0 km" : String(d), L - 7, y);
     }
-    c.save(); c.translate(11, Y(SKY + (15 * SCALE) / H)); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText("depth", 0, 0); c.restore();
+    c.save(); c.translate(11, Y(SKY + DEPTH_KM / 2 / H)); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText("depth", 0, 0); c.restore();
     c.save();
     c.beginPath(); c.rect(L, T, iw, ih); c.clip();
     // the ground surface
@@ -955,21 +1025,6 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
         const [nx, ny] = upward(chosen), slips = rupture && rupture.fault === chosen ? ` · ${((rupture.s1 - rupture.s0) * H).toFixed(1)} km slips` : "";
         beside(`rupture starts here${slips}`, hx - nx * 4, hy - ny * 4, -nx, -ny, RUST);
       }
-    }
-    // the water table: where dry sand meets wet sand
-    if (labels && presetId === "watertable") {
-      const dry = Math.fround(ROCK.sand.vp), wet = Math.fround(ROCK.wetsand.vp);
-      c.beginPath();
-      let pen = false, lx = 0, ly = 0;
-      for (let x = 0; x < W; x += 2) {
-        let y = -1;
-        for (let j = top[x]; j < VH - 1; j++) { const k = j * NX + x + SPONGE; if (ground.vp[k] === dry && ground.vp[k + NX] === wet) { y = j + 1; break; } }
-        if (y < 0) { pen = false; continue; }
-        if (pen) c.lineTo(X(x), Y(y)); else c.moveTo(X(x), Y(y));
-        pen = true; lx = X(x); ly = Y(y);
-      }
-      c.setLineDash([6, 4]); c.strokeStyle = NAVY; c.lineWidth = 1.3; c.stroke(); c.setLineDash([]);
-      if (lx) { c.font = MONO(10); c.textAlign = "right"; c.textBaseline = "top"; label(c, "water table", lx - 6, ly + 4, NAVY); }
     }
     // noise sources: a mark on the surface with its waves going down
     sources.forEach((q) => {
@@ -1050,7 +1105,7 @@ export function createQuake(main: HTMLElement, side: HTMLElement, room: Room, lo
     // the heading, shorter on narrow screens so it never runs into the scale note
     const scaleNote = trueSize ? "all traces at the same scale" : "each trace scaled to fit", room = w - R - c.measureText(scaleNote).width - 16;
     const short = `${what.toUpperCase()}, ${comp === "z" ? "UP AND DOWN" : "SIDEWAYS"}${bandText.toUpperCase()}`;
-    const heading = [`SEISMOGRAMS · ${short} · ${SPS} SAMPLES PER SECOND`, `SEISMOGRAMS · ${short}`, short].find((t) => c.measureText(t).width <= room);
+    const heading = [`SEISMOGRAMS · ${short} · ${+SPS.toFixed(1)} SAMPLES PER SECOND`, `SEISMOGRAMS · ${short}`, short].find((t) => c.measureText(t).width <= room);
     c.textAlign = "left"; c.fillText(heading ?? short, 0, 12);
     if (heading) { c.textAlign = "right"; c.fillText(scaleNote, w - R, 12); }
     c.strokeStyle = MUTED; c.lineWidth = 1;
